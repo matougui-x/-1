@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="720" viewBox="0 0 1120 720" font-family="'Microsoft YaHei','PingFang SC',sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8A94A0"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#12A87A"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D98209"/>
+    </marker>
+  </defs>
+
+  <rect width="1120" height="720" fill="#F4F6F8"/>
+  <text x="40" y="46" font-size="23" font-weight="bold" fill="#1B1F23">校园失物招领 · 系统数据流图</text>
+  <text x="40" y="72" font-size="13.5" fill="#5A6470">数据从用户操作流入，经页面控制器收集，交由数据层处理，再以「公开视图」的形式回流到界面</text>
+
+  <!-- ================= 第 1 层：用户操作 ================= -->
+  <text x="40" y="118" font-size="13" font-weight="bold" fill="#5A6470">① 用户操作</text>
+  <g font-size="13" fill="#1B1F23" text-anchor="middle">
+    <rect x="40" y="130" width="152" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="116" y="161">发布寻物 / 招领</text>
+
+    <rect x="212" y="130" width="152" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="288" y="161">浏览与筛选</text>
+
+    <rect x="384" y="130" width="152" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="460" y="161">关键词搜索</text>
+
+    <rect x="556" y="130" width="152" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="632" y="161">认领并作答</text>
+
+    <rect x="728" y="130" width="152" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="804" y="161">标记已找到/已归还</text>
+
+    <rect x="900" y="130" width="180" height="52" rx="10" fill="#FFFFFF" stroke="#E2E7EC"/>
+    <text x="990" y="154">编辑 / 删除</text>
+    <text x="990" y="172" font-size="11.5" fill="#9AA3AE">（仅发布者本人）</text>
+  </g>
+
+  <!-- 箭头 1→2 -->
+  <path d="M 560 182 L 560 214" stroke="#8A94A0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="572" y="204" font-size="12" fill="#9AA3AE">表单数据 / 筛选条件 / 答案</text>
+
+  <!-- ================= 第 2 层：页面控制器 ================= -->
+  <text x="40" y="238" font-size="13" font-weight="bold" fill="#5A6470">② 页面控制器 js/page-*.js</text>
+  <rect x="40" y="250" width="1040" height="70" rx="12" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="60" y="278" font-size="13" fill="#1B1F23">收集输入、调用数据层、渲染结果、处理交互分支（首页 / 搜索 / 详情 / 发布 / 我的发布 / 认领验证 / 结果页）</text>
+  <text x="60" y="302" font-size="12" fill="#9AA3AE">这一层只负责「把数据摆到界面上」和「把用户输入交下去」，不写业务规则</text>
+
+  <!-- 箭头 2→3 -->
+  <path d="M 560 320 L 560 356" stroke="#12A87A" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="572" y="344" font-size="12" fill="#0E8F68">调用方法：create / list / update / markDone / startClaim / submitClaim</text>
+
+  <!-- ================= 第 3 层：数据层 ================= -->
+  <rect x="40" y="362" width="1040" height="150" rx="12" fill="#E6F6F0" stroke="#12A87A" stroke-width="1.5"/>
+  <text x="60" y="388" font-size="13.5" font-weight="bold" fill="#0E8F68">③ 数据层 js/store.js　—　全部业务规则都在这一层，因此可以被单元测试完整覆盖</text>
+
+  <g font-size="12.5" fill="#1B1F23" text-anchor="middle">
+    <rect x="60" y="404" width="230" height="88" rx="10" fill="#FFFFFF" stroke="#B7E6D5"/>
+    <text x="175" y="430" font-weight="bold">表单校验</text>
+    <text x="175" y="452" font-size="11.5" fill="#5A6470">必填、长度、时间合法性</text>
+    <text x="175" y="470" font-size="11.5" fill="#5A6470">返回「字段 → 中文提示」</text>
+
+    <rect x="306" y="404" width="230" height="88" rx="10" fill="#FFFFFF" stroke="#B7E6D5"/>
+    <text x="421" y="430" font-weight="bold">查询与排序</text>
+    <text x="421" y="452" font-size="11.5" fill="#5A6470">关键词匹配（多词按「与」）</text>
+    <text x="421" y="470" font-size="11.5" fill="#5A6470">类型 / 分类 / 地点 / 状态筛选</text>
+
+    <rect x="552" y="404" width="230" height="88" rx="10" fill="#FFFFFF" stroke="#B7E6D5"/>
+    <text x="667" y="430" font-weight="bold">状态流转与权限</text>
+    <text x="667" y="452" font-size="11.5" fill="#5A6470">已找到 / 已归还、撤回</text>
+    <text x="667" y="470" font-size="11.5" fill="#5A6470">校验是否为发布者本人</text>
+
+    <rect x="798" y="404" width="262" height="88" rx="10" fill="#FFFDF6" stroke="#F0D9A8"/>
+    <text x="929" y="430" font-weight="bold" fill="#B26A00">认领比对（防冒领核心）</text>
+    <text x="929" y="452" font-size="11.5" fill="#8A6100">随机抽 2 项 → 归一化比对答案</text>
+    <text x="929" y="470" font-size="11.5" fill="#8A6100">扣次数、3 次锁定、生成凭证码</text>
+  </g>
+
+  <!-- 箭头 3→4 -->
+  <path d="M 400 512 L 400 548" stroke="#8A94A0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="412" y="536" font-size="12" fill="#9AA3AE">读写</text>
+
+  <!-- ================= 第 4 层：存储适配器 ================= -->
+  <text x="40" y="572" font-size="13" font-weight="bold" fill="#5A6470">④ 存储适配器（同一套接口，按可用性依次降级）</text>
+  <g font-size="13" fill="#1B1F23" text-anchor="middle">
+    <rect x="40" y="584" width="290" height="54" rx="10" fill="#FFFFFF" stroke="#B7E6D5"/>
+    <text x="185" y="608" font-weight="bold">localStorage</text>
+    <text x="185" y="627" font-size="11.5" fill="#0E8F68">首选：关掉浏览器数据仍在</text>
+
+    <rect x="352" y="584" width="290" height="54" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+    <text x="497" y="608" font-weight="bold">sessionStorage</text>
+    <text x="497" y="627" font-size="11.5" fill="#5A6470">降级：同标签页内跨页面有效</text>
+
+    <rect x="664" y="584" width="290" height="54" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+    <text x="809" y="608" font-weight="bold">内存适配器</text>
+    <text x="809" y="627" font-size="11.5" fill="#5A6470">兜底：并提示用户数据不保留</text>
+  </g>
+
+  <!-- 关键约束说明 -->
+  <rect x="40" y="658" width="1040" height="46" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="60" y="678" font-size="12.5" fill="#8A6100">🔒 关键约束：数据层向上返回的每一个对象都经过 toPublic() 处理，<tspan font-weight="bold">隐藏特征的答案在这一步就被剥离</tspan>。</text>
+  <text x="60" y="696" font-size="12.5" fill="#8A6100">因此首页、搜索结果、详情页拿到的数据里根本不存在答案——不是靠界面藏起来，而是数据本身就没传出来。</text>
+</svg>

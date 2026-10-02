@@ -1,0 +1,312 @@
+/*!
+ * 信息详情页控制器
+ *
+ * 这个页面是"防冒领"设计真正落地的地方：
+ *   - 需要验证的招领信息，未通过验证的访客拿到的对象里联系方式是空字符串，
+ *     页面连渲染都渲染不出来（数据层已经剥掉了，不是靠前端藏起来）；
+ *   - 发布者本人看自己的信息时，则直接显示完整的联系方式，并给出状态维护入口。
+ *
+ * 底部操作条按"我是谁 / 这条信息什么状态"分三种情况渲染，是本页最主要的分支逻辑。
+ */
+(function (root) {
+  'use strict';
+
+  var LF = root.LF;
+  var U = LF.utils;
+  var ui = LF.ui;
+  var esc = U.escapeHtml;
+
+  var app = ui.startPage({ nav: '', tabbar: false });
+  var store = app.store;
+  var myId = app.myId;
+
+  var contentEl = ui.qs('#content');
+  var actionBar = ui.qs('#actionBar');
+  var postId = U.query('id');
+
+  // ---------------------------------------------------------------- 找不到信息
+
+  function renderNotFound() {
+    ui.qs('#barTitle').textContent = '信息不存在';
+    ui.renderEmpty(contentEl, {
+      icon: '🔎',
+      title: '这条信息不存在或已被删除',
+      desc: '可能发布者已经把它删掉了，或者链接不完整。回到首页看看其它信息吧。',
+      actions: [
+        { text: '返回首页', href: 'index.html', primary: true },
+        { text: '去搜索', href: 'search.html' }
+      ]
+    });
+    actionBar.innerHTML = '';
+    ui.markReady({ page: 'detail', found: 0 });
+  }
+
+  // ---------------------------------------------------------------- 渲染正文
+
+  function heroHtml(post) {
+    var badge = '<span class="hero-badge' + (post.type === 'lost' ? ' is-lost' : '') + '">' +
+      esc(post.typeName) + '</span>';
+    if (post.photos && post.photos.length) {
+      return '<div class="hero">' + badge +
+        '<img src="' + esc(post.photos[0]) + '" alt="' + esc(post.title) + '">' +
+        '</div>';
+    }
+    return '<div class="hero">' + badge + esc(post.categoryIcon) + '</div>';
+  }
+
+  function photoStripHtml(post) {
+    if (!post.photos || post.photos.length < 2) return '';
+    return '<div class="photo-strip">' + post.photos.slice(1).map(function (src, index) {
+      return '<img src="' + esc(src) + '" alt="物品照片 ' + (index + 2) + '" data-photo="' + index + '">';
+    }).join('') + '</div>';
+  }
+
+  function statusChips(post) {
+    var chips = '';
+    if (post.needVerify) {
+      // 发布者看自己的信息时，说"已验证"没有意义，应该说这条信息正被保护着
+      if (post.isOwner) chips += '<span class="chip chip-lock">🔒 验证保护中</span>';
+      else if (post.locked) chips += '<span class="chip chip-lock">🔒 需验证</span>';
+      else chips += '<span class="chip chip-ok">🔓 已解锁</span>';
+    }
+    chips += '<span class="chip ' + (post.status === 'done' ? 'chip-done' : 'chip-wait') + '">' +
+      esc(post.statusLabel) + '</span>';
+    return chips;
+  }
+
+  function infoRowsHtml(post) {
+    var isFound = post.type === 'found';
+    var rows = [];
+
+    rows.push(['信息类型', esc(LF.typeOf(post.type).full)]);
+    rows.push(['物品分类', esc(post.categoryIcon + ' ' + post.categoryName)]);
+    rows.push([isFound ? '拾取地点' : '丢失地点', esc(post.location) + '（' + esc(post.areaName) + '）']);
+    rows.push([isFound ? '拾取时间' : '丢失时间', esc(U.formatDateTime(post.happenedAt)) + ' 左右']);
+
+    var publisher = esc(post.contactName);
+    if (post.contactDept) publisher += '（' + esc(post.contactDept) + '）';
+    if (post.isOwner) publisher += ' <span class="chip chip-ok">我发布的</span>';
+    rows.push(['发布人', publisher]);
+
+    // 联系方式：锁定状态下数据层根本不返回，这里给的是引导文案
+    if (post.locked) {
+      rows.push(['联系方式',
+        '<span class="is-locked">🔒 通过认领验证后可见</span>', true]);
+    } else {
+      rows.push(['联系方式', esc(post.contactWay)]);
+    }
+
+    if (post.status === 'done' && post.doneAt) {
+      rows.push([post.doneLabel === '已找到' ? '找到时间' : '归还时间',
+        esc(U.formatDateTime(post.doneAt))]);
+    }
+
+    return '<div class="info-rows">' + rows.map(function (row) {
+      return '<div class="info-row">' +
+        '<span class="k">' + row[0] + '</span>' +
+        '<span class="v' + (row[2] ? ' is-locked' : '') + '">' + row[1] + '</span>' +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  function lockboxHtml(post) {
+    if (!post.needVerify) return '';
+    return '<div class="lockbox mt-12">' +
+      '<span class="ic">🔒</span>' +
+      '<span>发布者已隐藏 <b>' + post.hiddenCount + ' 项关键特征</b>：' +
+      esc(post.hiddenLabels.join('、')) + '。' +
+      '<span class="lk">认领时需回答其中 ' + Math.min(LF.VERIFY.pickCount, post.hiddenCount) +
+      ' 项，全部正确才会显示发布者的联系方式并生成认领凭证。</span></span>' +
+      '</div>';
+  }
+
+  function render(post) {
+    ui.qs('#barTitle').textContent = '信息详情';
+    root.document.title = post.title + ' · 校园失物招领';
+
+    var safetyText = post.locked
+      ? '🔒 请先核对物品特征再申请认领；连续 ' + LF.VERIFY.maxAttempts +
+        ' 次未通过后，可以申请人工核对，由发布者判断。'
+      : '🔒 请先核对物品特征再交接；建议约在图书馆、宿舍楼下等公共场所见面，不要提前转账。';
+
+    contentEl.innerHTML =
+      heroHtml(post) +
+      photoStripHtml(post) +
+      '<div class="panel">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">' +
+          '<h1 style="font-size:19px;font-weight:600;line-height:1.4">' + esc(post.title) + '</h1>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">' +
+          statusChips(post) +
+          '<span class="text-small text-muted">发布于 ' + esc(U.formatRelative(post.createdAt)) +
+          ' · 浏览 ' + post.views + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="mt-12">' + infoRowsHtml(post) + '</div>' +
+      lockboxHtml(post) +
+      (post.description
+        ? '<div class="panel mt-12">' +
+            '<h4 style="font-size:13px;color:var(--ink-3);font-weight:500;margin-bottom:8px">物品描述</h4>' +
+            '<p style="line-height:1.8;white-space:pre-wrap">' + esc(post.description) + '</p>' +
+          '</div>'
+        : '') +
+      '<div class="safe-tip mt-12"><span>🔒</span><span>' + esc(safetyText) + '</span></div>' +
+      (post.isOwner && U.isStale(post.createdAt)
+        ? '<div class="lockbox mt-12"><span class="ic">⏰</span><span>这条信息发布了 ' +
+          '较长时间还没有结束，如果东西已经找到，记得回来把它标记为已完成，' +
+          '免得其他同学白跑一趟。</span></div>'
+        : '');
+
+    // 多张照片时，点缩略图放大看
+    ui.qsa('[data-photo]', contentEl).forEach(function (img) {
+      img.addEventListener('click', function () {
+        ui.modal({
+          title: '物品照片',
+          bodyHtml: '<img src="' + esc(img.getAttribute('src')) + '" alt="物品照片" ' +
+            'style="width:100%;border-radius:10px">',
+          buttons: [{ text: '关闭', primary: true }]
+        });
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- 底部操作条
+
+  function btn(text, className, onClick) {
+    var node = ui.el('<button type="button" class="btn ' + className + '">' + esc(text) + '</button>');
+    if (onClick) node.addEventListener('click', onClick);
+    return node;
+  }
+
+  /** 发布者视角：维护状态、编辑、删除、看认领申请。 */
+  function renderOwnerActions(post) {
+    actionBar.innerHTML = '';
+    actionBar.appendChild(btn('编辑', 'btn-ghost', function () {
+      U.go('publish', { id: post.id });
+    }));
+
+    if (post.needVerify && post.claimCount > 0) {
+      actionBar.appendChild(btn('认领申请 ' + post.claimCount, 'btn-ghost', function () {
+        showClaims(post);
+      }));
+    }
+
+    if (post.status === 'open') {
+      var label = post.type === 'found' ? '标记已归还' : '标记已找到';
+      actionBar.appendChild(btn(label, 'btn-primary', function () {
+        doMarkDone(post, label);
+      }));
+    } else {
+      actionBar.appendChild(btn('撤回完成状态', 'btn-primary', function () {
+        var result = store.reopen(post.id, myId);
+        if (!result.ok) return ui.toast(result.errors._, 'error');
+        ui.toast('已重新挂出，别人又能看到这条信息了', 'ok');
+        refresh();
+      }));
+    }
+  }
+
+  /** 访客视角：需要验证的引导去认领，不需要验证的直接给联系方式。 */
+  function renderVisitorActions(post) {
+    actionBar.innerHTML = '';
+
+    if (post.locked) {
+      actionBar.appendChild(btn('暂不认领', 'btn-ghost', function () {
+        root.history.length > 1 ? root.history.back() : U.go('index');
+      }));
+      actionBar.appendChild(btn('🔒 我要认领（需验证）', 'btn-primary', function () {
+        U.go('verify', { id: post.id });
+      }));
+      return;
+    }
+
+    actionBar.appendChild(btn('返回首页', 'btn-ghost', function () {
+      U.go('index');
+    }));
+    var copyBtn = btn('复制联系方式', 'btn-primary', function () {
+      ui.copyWithToast(post.contactWay, '联系方式已复制：' + post.contactWay);
+    });
+    actionBar.appendChild(copyBtn);
+  }
+
+  function doMarkDone(post, label) {
+    ui.confirm({
+      title: label + '？',
+      message: '标记之后，这条信息在首页、搜索结果里都会显示为「' +
+        (post.type === 'found' ? '已归还' : '已找到') +
+        '」，其他同学就不会再联系你了。如果弄错了，随时可以撤回。',
+      okText: label
+    }).then(function (ok) {
+      if (!ok) return;
+      var result = store.markDone(post.id, myId);
+      if (!result.ok) return ui.toast(result.errors._, 'error');
+      ui.toast('已标记为' + (post.type === 'found' ? '已归还' : '已找到'), 'ok');
+      refresh();
+    });
+  }
+
+  /** 发布者查看收到的认领申请（含答错的记录，便于判断是否要给人工核对机会）。 */
+  function showClaims(post) {
+    var result = store.listClaims(post.id, myId);
+    if (!result.ok) return ui.toast(result.message, 'error');
+
+    var body;
+    if (!result.claims.length) {
+      body = '<p class="text-muted">还没有人提交认领申请。</p>';
+    } else {
+      body = result.claims.map(function (claim) {
+        var answers = claim.answers.map(function (item) {
+          return '<div><span class="k">' + esc(item.q) + '</span>' +
+            '<span class="v' + (claim.passed ? '' : ' bad') + '">' + esc(item.a || '（未填）') + '</span></div>';
+        }).join('');
+        return '<div class="claim-item">' +
+          '<div class="claim-head">' +
+            '<span class="chip ' + (claim.passed ? 'chip-ok' : 'chip-red') + '">' +
+              (claim.passed ? '验证通过' : '验证未通过') + '</span>' +
+            '<span class="claim-time">' + esc(U.formatRelative(claim.at)) + '</span>' +
+          '</div>' +
+          '<div class="claim-answers">' + answers +
+            (claim.voucher ? '<div><span class="k">凭证码</span><span class="v">' +
+              esc(claim.voucher) + '</span></div>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    ui.modal({
+      title: '收到的认领申请',
+      bodyHtml: body +
+        '<p class="text-small text-muted mt-12">答错的同学如果确实了解物品特征，' +
+        '可以在线下核对后直接联系他。</p>',
+      buttons: [{ text: '关闭', primary: true }]
+    });
+  }
+
+  // ---------------------------------------------------------------- 数据刷新
+
+  var current = null;
+
+  function refresh(countView) {
+    current = store.get(postId, myId, !!countView);
+    if (!current) return renderNotFound();
+
+    render(current);
+    if (current.isOwner) renderOwnerActions(current);
+    else renderVisitorActions(current);
+
+    ui.markReady({
+      page: 'detail',
+      found: 1,
+      locked: current.locked ? 1 : 0,
+      owner: current.isOwner ? 1 : 0
+    });
+  }
+
+  // ---------------------------------------------------------------- 启动
+
+  if (!postId) {
+    renderNotFound();
+  } else {
+    refresh(true);   // 首次进入计一次浏览
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this);

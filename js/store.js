@@ -1,0 +1,1084 @@
+/*!
+ * 校园失物招领 —— 数据层
+ *
+ * 设计要点（这几条决定了整个项目为什么好测、好改）：
+ *
+ * 1. 存储靠"注入"。createStore(storage) 只要求 storage 提供
+ *    getItem / setItem / removeItem 三个方法，和 localStorage 的接口一致。
+ *    于是浏览器里传 localStorage，单元测试里传内存实现，业务代码一个字都不用改，
+ *    测试也就不需要 jsdom、不需要起服务器。
+ *
+ * 2. 业务规则全部集中在这里，页面只负责显示。校验、搜索、状态流转、
+ *    认领验证这些容易出错的逻辑都写成"输入 → 输出"的形式，可以直接断言。
+ *
+ * 3. 隐藏特征答案是本项目的核心隐私。任何对外输出的对象都必须经过
+ *    toPublic()，它会剥掉答案字段。列表、搜索、详情一律走 toPublic，
+ *    只有 submitClaim() 会在内部比对答案，比对完也不返回答案本身。
+ *
+ * 4. 没有账号体系（作业不要求实名认证），用本机 uid 判断"我的发布"。
+ *    因此所有写操作都要带上 actor（当前用户 id），由 store 校验归属。
+ */
+(function (root) {
+  'use strict';
+
+  var LF = (root.LF = root.LF || {});
+  var U = LF.utils;
+
+  // ================================================================ 存储适配器
+
+  /** 内存适配器：单元测试用，也作为 localStorage 不可用时的兜底。 */
+  LF.createMemoryAdapter = function (initial) {
+    var data = {};
+    if (initial) {
+      for (var k in initial) {
+        if (Object.prototype.hasOwnProperty.call(initial, k)) data[k] = String(initial[k]);
+      }
+    }
+    return {
+      name: 'memory',
+      persistent: false,
+      getItem: function (key) {
+        return Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null;
+      },
+      setItem: function (key, value) {
+        data[key] = String(value);
+      },
+      removeItem: function (key) {
+        delete data[key];
+      },
+      dump: function () {
+        return JSON.parse(JSON.stringify(data));
+      }
+    };
+  };
+
+  /**
+   * 探测某个存储对象是否真的能读写。
+   *
+   * 光判断对象存在是不够的：无痕模式、被企业策略限制、或用户关掉了
+   * "允许网站保存数据"时，访问 localStorage 这个属性本身就可能抛
+   * SecurityError，setItem 也可能抛 QuotaExceededError。
+   * 所以这里真写一次再删掉，确认可用才采用。
+   */
+  function probeStorage(getStorage) {
+    var storage = null;
+    try {
+      storage = getStorage();
+    } catch (e) {
+      return null;                       // 访问属性就抛了
+    }
+    if (!storage) return null;
+    try {
+      var key = '__lf_probe__';
+      storage.setItem(key, '1');
+      if (storage.getItem(key) !== '1') return null;
+      storage.removeItem(key);
+      return storage;
+    } catch (e) {
+      return null;                       // 只读或写满
+    }
+  }
+
+  /** 把底层存储包装成适配器；写失败时按需抛出，由上层翻译成用户提示。 */
+  function wrapStorage(storage, name, persistent, fallback) {
+    return {
+      name: name,
+      persistent: persistent,
+      getItem: function (key) {
+        try { return storage.getItem(key); } catch (e) { return fallback.getItem(key); }
+      },
+      setItem: function (key, value) {
+        try {
+          storage.setItem(key, value);
+        } catch (e) {
+          // 配额异常要往外抛，让 write() 提示用户清理；其它异常退到兜底存储
+          if (isQuotaError(e)) throw e;
+          fallback.setItem(key, value);
+        }
+      },
+      removeItem: function (key) {
+        try { storage.removeItem(key); } catch (e) { fallback.removeItem(key); }
+      }
+    };
+  }
+
+  /**
+   * 浏览器适配器：按 localStorage → sessionStorage → 内存 的顺序降级。
+   *
+   * 为什么中间要加 sessionStorage：这是个多页应用，每跳一次页面 JS 内存全部重置。
+   * 如果 localStorage 不可用就直接退回内存，"发布 → 跳成功页"那一步数据就没了，
+   * 主流程直接断掉。sessionStorage 至少能让同一标签页内跨页面把流程走完。
+   *
+   * persistent 表示"关掉浏览器后数据还在"，页面据此决定要不要提示用户。
+   */
+  LF.createBrowserAdapter = function () {
+    var memory = LF.createMemoryAdapter();
+
+    var local = probeStorage(function () { return root.localStorage; });
+    if (local) return wrapStorage(local, 'localStorage', true, memory);
+
+    var session = probeStorage(function () { return root.sessionStorage; });
+    if (session) {
+      var wrapped = wrapStorage(session, 'sessionStorage', false, memory);
+      wrapped.reason = '浏览器禁用了本地存储，已临时改用会话存储，关闭标签页后数据会丢失';
+      return wrapped;
+    }
+
+    memory.reason = '浏览器禁用了本地存储，数据仅在当前页面有效';
+    return memory;
+  };
+
+  /** 判断是不是"存储写满"这一类错误，各浏览器抛的名字不一样。 */
+  function isQuotaError(e) {
+    if (!e) return false;
+    return e.name === 'QuotaExceededError' ||
+      e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      e.code === 22 || e.code === 1014;
+  }
+
+  // ================================================================ 校验规则
+
+  var LIMITS = {
+    titleMin: 2, titleMax: 40,
+    locationMin: 2, locationMax: 40,
+    descMax: 300,
+    contactNameMax: 20,
+    contactDeptMax: 30,
+    contactWayMin: 3, contactWayMax: 60,
+    answerMax: 20,
+    futureToleranceMs: 5 * 60 * 1000   // 允许 5 分钟的"手快填成未来时间"
+  };
+
+  LF.LIMITS = LIMITS;
+
+  /**
+   * 校验一条待发布/待编辑的信息。
+   * 返回 { ok, errors }，errors 是"字段名 → 中文提示"，可直接显示在对应输入框下方。
+   * 这个函数是纯的：给定同样输入必然得到同样输出，测试用例直接断言 errors 的键值。
+   */
+  LF.validatePost = function (input, options) {
+    var opts = options || {};
+    var errors = {};
+    var data = input || {};
+    var isFound = data.type === 'found';
+
+    // 类型
+    if (LF.fields(LF.TYPES).indexOf(data.type) === -1) {
+      errors.type = '请选择信息类型';
+    }
+
+    // 物品名称
+    var title = U.clean(data.title);
+    if (!title) {
+      errors.title = '请填写物品名称';
+    } else if (title.length < LIMITS.titleMin) {
+      errors.title = '物品名称至少 ' + LIMITS.titleMin + ' 个字';
+    } else if (title.length > LIMITS.titleMax) {
+      errors.title = '物品名称不能超过 ' + LIMITS.titleMax + ' 个字';
+    }
+
+    // 分类
+    if (LF.fields(LF.CATEGORIES).indexOf(data.category) === -1) {
+      errors.category = '请选择物品分类';
+    }
+
+    // 地点区域
+    if (LF.fields(LF.AREAS).indexOf(data.area) === -1) {
+      errors.area = '请选择所在区域';
+    }
+
+    // 具体地点
+    var location = U.clean(data.location);
+    if (!location) {
+      errors.location = '请填写具体地点';
+    } else if (location.length < LIMITS.locationMin) {
+      errors.location = '具体地点太短了，请写清楚一些';
+    } else if (location.length > LIMITS.locationMax) {
+      errors.location = '具体地点不能超过 ' + LIMITS.locationMax + ' 个字';
+    }
+
+    // 发生时间
+    var when = U.parseTime(data.happenedAt);
+    if (!when) {
+      errors.happenedAt = isFound ? '请选择拾取时间' : '请选择丢失时间';
+    } else {
+      var now = opts.now ? U.parseTime(opts.now) : new Date();
+      if (now && when.getTime() - now.getTime() > LIMITS.futureToleranceMs) {
+        errors.happenedAt = '时间不能晚于当前时间';
+      }
+      if (when.getFullYear() < 2000) {
+        errors.happenedAt = '时间看起来不太对，请重新选择';
+      }
+    }
+
+    // 描述
+    var desc = U.clean(data.description);
+    if (desc.length > LIMITS.descMax) {
+      errors.description = '物品描述不能超过 ' + LIMITS.descMax + ' 个字';
+    }
+
+    // 照片
+    var photos = data.photos || [];
+    if (photos.length > U.IMAGE_RULES.maxCount) {
+      errors.photos = '最多上传 ' + U.IMAGE_RULES.maxCount + ' 张照片';
+    }
+
+    // 联系人
+    var contactName = U.clean(data.contactName);
+    if (!contactName) {
+      errors.contactName = '请填写联系人';
+    } else if (contactName.length > LIMITS.contactNameMax) {
+      errors.contactName = '联系人不能超过 ' + LIMITS.contactNameMax + ' 个字';
+    }
+
+    var contactDept = U.clean(data.contactDept);
+    if (contactDept.length > LIMITS.contactDeptMax) {
+      errors.contactDept = '院系年级不能超过 ' + LIMITS.contactDeptMax + ' 个字';
+    }
+
+    // 联系方式
+    var contactWay = U.clean(data.contactWay);
+    if (!contactWay) {
+      errors.contactWay = '请填写联系方式';
+    } else if (contactWay.length < LIMITS.contactWayMin) {
+      errors.contactWay = '联系方式太短了，请写清楚（比如"微信：abc123"）';
+    } else if (contactWay.length > LIMITS.contactWayMax) {
+      errors.contactWay = '联系方式不能超过 ' + LIMITS.contactWayMax + ' 个字';
+    }
+
+    // 隐藏特征：只有招领需要，且至少填 2 项、答案不能为空
+    var hidden = normalizeHidden(data.hidden);
+    if (isFound) {
+      var filled = hidden.filter(function (item) { return item.a !== ''; });
+      if (filled.length < LF.VERIFY.minHidden) {
+        errors.hidden = '请至少设置 ' + LF.VERIFY.minHidden + ' 项只有失主知道的特征';
+      }
+      for (var i = 0; i < filled.length; i++) {
+        if (filled[i].a.length > LIMITS.answerMax) {
+          errors.hidden = '单条特征答案不能超过 ' + LIMITS.answerMax + ' 个字';
+          break;
+        }
+      }
+      if (filled.length > LF.VERIFY.maxHidden) {
+        errors.hidden = '最多设置 ' + LF.VERIFY.maxHidden + ' 项隐藏特征';
+      }
+    }
+
+    return { ok: Object.keys(errors).length === 0, errors: errors };
+  };
+
+  /** 把任意形态的 hidden 输入整理成 [{ q, a }]，过滤掉空问题名。 */
+  function normalizeHidden(hidden) {
+    var list = Array.isArray(hidden) ? hidden : [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i] || {};
+      var q = U.clean(item.q);
+      if (!q) continue;
+      out.push({ q: q, a: U.clean(item.a) });
+    }
+    return out;
+  }
+
+  // ================================================================ 公开视图
+
+  /** 招领信息设置了隐藏特征时，非发布者必须通过验证才能看到联系方式。 */
+  function needsVerify(post) {
+    return post.type === 'found' && Array.isArray(post.hidden) && post.hidden.length > 0;
+  }
+
+  LF.needsVerify = needsVerify;
+
+  /**
+   * 把内部数据转成可以安全交给页面的对象。
+   * ★ 这里删除 hidden 里的答案，只保留问题的"名字"，是防冒领的第一道闸门。
+   */
+  LF.toPublic = function (post, options) {
+    var opts = options || {};
+    var out = {};
+    var key;
+
+    for (key in post) {
+      if (Object.prototype.hasOwnProperty.call(post, key)) out[key] = post[key];
+    }
+
+    var hidden = Array.isArray(post.hidden) ? post.hidden : [];
+    out.hiddenCount = hidden.filter(function (item) { return item.a !== ''; }).length;
+    // 只暴露"隐藏了哪些特征"，答案本身绝不外传
+    out.hiddenLabels = hidden
+      .filter(function (item) { return item.a !== ''; })
+      .map(function (item) { return item.q; });
+
+    delete out.hidden;
+    delete out.pendingClaim;
+    delete out.ownerId;        // 归属关系用 isOwner 表达，不直接把 uid 交给页面
+
+    var isOwner = !!opts.viewerId && opts.viewerId === post.ownerId;
+    out.isOwner = isOwner;
+    out.needVerify = needsVerify(post);
+    out.locked = out.needVerify && !isOwner && !opts.unlocked;
+
+    if (out.locked) {
+      out.contactWay = '';     // 未解锁：联系方式根本不进页面
+    }
+    // 发布人姓名对非发布者一律打码，页面上显示成"张**"
+    out.contactName = isOwner ? post.contactName : maskName(post.contactName);
+
+    var doneType = post.doneType && LF.DONE_TYPES[post.type] ? LF.DONE_TYPES[post.type] : null;
+    out.doneLabel = post.status === 'done' && doneType ? doneType.name : '';
+    out.statusLabel = post.status === 'done'
+      ? (doneType ? doneType.name : '已完成')
+      : (post.type === 'found' ? '待认领' : '寻找中');
+
+    out.categoryName = LF.categoryOf(post.category).name;
+    out.categoryIcon = LF.categoryOf(post.category).icon;
+    out.areaName = LF.areaOf(post.area).name;
+    out.typeName = LF.typeOf(post.type).name;
+    out.typeTag = LF.typeOf(post.type).tag;
+    out.thumb = (post.photos && post.photos.length) ? post.photos[0] : LF.categoryOf(post.category).icon;
+
+    // 认领统计：给"我的发布"用；对非发布者只给一个 0，避免泄露有多少人在认领
+    var claims = Array.isArray(post.claims) ? post.claims : [];
+    out.claimCount = isOwner ? claims.length : 0;
+    out.claimPassed = isOwner ? claims.filter(function (c) { return c.passed; }).length : 0;
+
+    return out;
+  };
+
+  /** 姓名打码：张三四 → 张**，用于公开页面的"发布人"一行。 */
+  function maskName(name) {
+    var s = U.clean(name);
+    if (!s) return '匿名同学';
+    if (s.length === 1) return s;
+    return s.charAt(0) + new Array(s.length).join('*');
+  }
+
+  LF.maskName = maskName;
+
+  // ================================================================ 搜索与排序
+
+  /**
+   * 关键词匹配：空格分隔的多个词之间是"与"的关系，每个词只要命中
+   * 物品名 / 描述 / 地点 / 分类名 / 区域名 任意一处就算命中。
+   * 归一化后比较，所以"校园卡"和"校园卡 "、"ABC"和"abc"结果一致。
+   */
+  LF.matchKeyword = function (post, keyword) {
+    var terms = U.normalizeText(keyword).split(' ').filter(function (t) { return t !== ''; });
+    if (!terms.length) return true;
+
+    var haystack = U.normalizeText([
+      post.title,
+      post.description,
+      post.location,
+      LF.categoryOf(post.category).name,
+      LF.areaOf(post.area).name,
+      LF.typeOf(post.type).name,
+      maskName(post.contactName)
+    ].join(' '));
+
+    for (var i = 0; i < terms.length; i++) {
+      if (haystack.indexOf(terms[i]) === -1) return false;
+    }
+    return true;
+  };
+
+  var SORTERS = {
+    latest: function (a, b) { return b.createdAt - a.createdAt; },
+    oldest: function (a, b) { return a.createdAt - b.createdAt; },
+    hot: function (a, b) { return (b.views - a.views) || (b.createdAt - a.createdAt); }
+  };
+
+  LF.SORTERS = SORTERS;
+
+  /** 在一批数据上执行筛选 + 排序，返回内部对象数组（调用方再决定要不要 toPublic）。 */
+  LF.queryPosts = function (posts, query) {
+    var q = query || {};
+    var result = posts.filter(function (post) {
+      if (q.type && q.type !== 'all' && post.type !== q.type) return false;
+      if (q.category && q.category !== 'all' && post.category !== q.category) return false;
+      if (q.area && q.area !== 'all' && post.area !== q.area) return false;
+      if (q.status && q.status !== 'all' && post.status !== q.status) return false;
+      if (q.ownerId && post.ownerId !== q.ownerId) return false;
+      if (q.excludeId && post.id === q.excludeId) return false;
+      if (q.keyword && !LF.matchKeyword(post, q.keyword)) return false;
+      return true;
+    });
+
+    var sorter = SORTERS[q.sort] || SORTERS.latest;
+    return result.sort(sorter);
+  };
+
+  // ================================================================ 创建 store
+
+  /**
+   * @param {object} storage 具备 getItem/setItem/removeItem 的存储对象
+   * @param {object} [options] { now: 固定当前时间（测试用）, random: 固定随机数（测试用） }
+   */
+  LF.createStore = function (storage, options) {
+    var store = {};
+    var opts = options || {};
+    var seed = opts.seed || [];
+
+    function now() {
+      return opts.now ? U.parseTime(opts.now).getTime() : Date.now();
+    }
+
+    function random() {
+      return opts.random || Math.random;
+    }
+
+    // ------------------------------------------------------------ 原始读写
+
+    function readJson(key, fallback) {
+      var raw;
+      try {
+        raw = storage.getItem(key);
+      } catch (e) {
+        return fallback;
+      }
+      if (raw == null || raw === '') return fallback;
+      try {
+        var parsed = JSON.parse(raw);
+        return parsed == null ? fallback : parsed;
+      } catch (e) {
+        // 数据被外部改坏了：不让整个页面白屏，退回默认值，页面还能用
+        return fallback;
+      }
+    }
+
+    /**
+     * 写回存储。
+     *
+     * 先按软上限拦一道，再交给浏览器写。这样即使用户的浏览器配额比预想的小，
+     * 我们给出的也是"请清理旧信息"这种能照做的提示，而不是一句原始报错。
+     * 任何失败都返回错误对象而不是抛异常，页面永远有东西可显示。
+     */
+    function writeJson(key, value) {
+      var json;
+      try {
+        json = JSON.stringify(value);
+      } catch (e) {
+        return { ok: false, message: '数据无法保存：包含无法序列化的内容' };
+      }
+
+      if (json.length > U.STORAGE_SOFT_LIMIT) {
+        return {
+          ok: false,
+          quota: true,
+          message: '本地存储快满了（已用约 ' + U.formatBytes(json.length * 2) + '）。' +
+            '请到「我的发布」删除一些带照片的旧信息后重试。'
+        };
+      }
+
+      try {
+        storage.setItem(key, json);
+        return { ok: true };
+      } catch (e) {
+        if (isQuotaError(e)) {
+          return {
+            ok: false,
+            quota: true,
+            message: '本地存储空间不足，无法保存。请到「我的发布」删除一些带照片的旧信息后重试。'
+          };
+        }
+        return { ok: false, message: '保存失败：' + (e && e.message ? e.message : '未知错误') };
+      }
+    }
+
+    function readPosts() {
+      var list = readJson(LF.KEYS.posts, null);
+      if (!Array.isArray(list)) return [];
+      // 过滤掉结构明显不对的脏数据，避免一条坏数据拖垮整个列表
+      return list.filter(function (item) {
+        return item && typeof item === 'object' && typeof item.id === 'string';
+      });
+    }
+
+    function writePosts(list) {
+      return writeJson(LF.KEYS.posts, list);
+    }
+
+    function findPost(id) {
+      var list = readPosts();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) return list[i];
+      }
+      return null;
+    }
+
+    // ------------------------------------------------------------ 初始化
+
+    /**
+     * 首次运行灌入演示数据。
+     * 判断依据是"存储里有没有 posts 这个键"，所以用户把数据全删光之后
+     * 也不会又被塞回来——只有在真正第一次打开时才写入。
+     * @param {Array} [seedPosts] 演示数据，不传则用创建 store 时给的 seed
+     */
+    store.init = function (seedPosts) {
+      if (readJson(LF.KEYS.posts, null) !== null) return { seeded: false };
+      var result = writeJson(LF.KEYS.posts, seedPosts || seed);
+      return { seeded: result.ok, error: result.message };
+    };
+
+    // ------------------------------------------------------------ 读
+
+    /** 列表查询，返回公开视图数组。 */
+    store.list = function (query) {
+      var q = query || {};
+      var rows = LF.queryPosts(readPosts(), q);
+      return rows.map(function (post) {
+        return LF.toPublic(post, {
+          viewerId: q.viewerId,
+          unlocked: q.viewerId ? store.isUnlocked(post.id) : false
+        });
+      });
+    };
+
+    /** 取一条信息的公开视图；countView 为真时同时累加浏览量。 */
+    store.get = function (id, viewerId, countView) {
+      var post = findPost(id);
+      if (!post) return null;
+      if (countView) store.bumpView(id);
+      var fresh = countView ? findPost(id) : post;
+      return LF.toPublic(fresh, {
+        viewerId: viewerId,
+        unlocked: viewerId ? store.isUnlocked(id) : false
+      });
+    };
+
+    /** 判断一条信息是否存在（详情页 404 用）。 */
+    store.exists = function (id) {
+      return !!findPost(id);
+    };
+
+    store.bumpView = function (id) {
+      var list = readPosts();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) {
+          list[i].views = (Number(list[i].views) || 0) + 1;
+          writePosts(list);
+          return list[i].views;
+        }
+      }
+      return 0;
+    };
+
+    /** 我的发布：按进行中 / 已完成分组。 */
+    store.listMine = function (ownerId) {
+      var rows = LF.queryPosts(readPosts(), { ownerId: ownerId, sort: 'latest' });
+      var toView = function (post) { return LF.toPublic(post, { viewerId: ownerId, unlocked: true }); };
+      return {
+        open: rows.filter(function (p) { return p.status === 'open'; }).map(toView),
+        done: rows.filter(function (p) { return p.status === 'done'; }).map(toView)
+      };
+    };
+
+    // ------------------------------------------------------------ 写
+
+    /**
+     * 发布一条信息。
+     * @returns {{ok:boolean, post?:object, errors?:object}}
+     */
+    store.create = function (input, actor) {
+      var data = input || {};
+      var check = LF.validatePost(data, { now: now() });
+      if (!check.ok) return { ok: false, errors: check.errors };
+      if (!actor) return { ok: false, errors: { _: '无法确认本机身份，请刷新页面重试' } };
+
+      var timestamp = now();
+      var post = {
+        id: U.uid(data.type === 'found' ? 'found' : 'lost'),
+        type: data.type,
+        title: U.clean(data.title),
+        category: data.category,
+        area: data.area,
+        location: U.clean(data.location),
+        happenedAt: U.parseTime(data.happenedAt).toISOString(),
+        description: U.clean(data.description),
+        photos: (data.photos || []).slice(0, U.IMAGE_RULES.maxCount),
+        contactName: U.clean(data.contactName),
+        contactDept: U.clean(data.contactDept),
+        contactWay: U.clean(data.contactWay),
+        status: 'open',
+        doneType: null,
+        doneAt: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        views: 0,
+        ownerId: actor,
+        hidden: data.type === 'found' ? normalizeHidden(data.hidden).filter(function (h) { return h.a !== ''; }) : [],
+        revealMode: data.revealMode || 'contact',
+        claims: [],
+        attemptsLeft: LF.VERIFY.maxAttempts
+      };
+
+      var list = readPosts();
+      list.push(post);
+      var written = writePosts(list);
+      if (!written.ok) return { ok: false, errors: { _: written.message } };
+
+      return { ok: true, post: LF.toPublic(post, { viewerId: actor, unlocked: true }) };
+    };
+
+    /**
+     * 编辑。id / createdAt / views / ownerId 一律以原记录为准，
+     * 防止前端传参把浏览量和归属改掉。
+     */
+    store.update = function (id, patch, actor) {
+      var list = readPosts();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id !== id) continue;
+        var original = list[i];
+
+        if (!actor || original.ownerId !== actor) {
+          return { ok: false, errors: { _: '只有发布者本人可以修改这条信息' } };
+        }
+
+        var merged = {};
+        for (var key in original) {
+          if (Object.prototype.hasOwnProperty.call(original, key)) merged[key] = original[key];
+        }
+        for (var pk in patch) {
+          if (Object.prototype.hasOwnProperty.call(patch, pk)) merged[pk] = patch[pk];
+        }
+        merged.id = original.id;
+        merged.createdAt = original.createdAt;
+        merged.views = original.views;
+        merged.ownerId = original.ownerId;
+        merged.claims = original.claims;
+        merged.attemptsLeft = original.attemptsLeft;
+
+        var check = LF.validatePost(merged, { now: now() });
+        if (!check.ok) return { ok: false, errors: check.errors };
+
+        merged.title = U.clean(merged.title);
+        merged.location = U.clean(merged.location);
+        merged.description = U.clean(merged.description);
+        merged.contactName = U.clean(merged.contactName);
+        merged.contactDept = U.clean(merged.contactDept);
+        merged.contactWay = U.clean(merged.contactWay);
+        merged.happenedAt = U.parseTime(merged.happenedAt).toISOString();
+        merged.hidden = merged.type === 'found'
+          ? normalizeHidden(merged.hidden).filter(function (h) { return h.a !== ''; })
+          : [];
+        merged.updatedAt = now();
+
+        list[i] = merged;
+        var written = writePosts(list);
+        if (!written.ok) return { ok: false, errors: { _: written.message } };
+
+        return { ok: true, post: LF.toPublic(merged, { viewerId: actor, unlocked: true }) };
+      }
+      return { ok: false, errors: { _: '这条信息不存在或已被删除' } };
+    };
+
+    /** 删除。只有发布者能删。 */
+    store.remove = function (id, actor) {
+      var list = readPosts();
+      var index = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { index = i; break; }
+      }
+      if (index === -1) return { ok: false, errors: { _: '这条信息不存在或已被删除' } };
+      if (!actor || list[index].ownerId !== actor) {
+        return { ok: false, errors: { _: '只有发布者本人可以删除这条信息' } };
+      }
+      list.splice(index, 1);
+      var written = writePosts(list);
+      if (!written.ok) return { ok: false, errors: { _: written.message } };
+      store.forgetUnlocked(id);
+      return { ok: true };
+    };
+
+    /**
+     * 更新状态：寻物 → 已找到，招领 → 已归还。
+     * 这是作业要求的主流程最后一环，也是"减少无效联系"的关键——
+     * 东西找到后把信息标掉，别人才不会白跑一趟。
+     */
+    store.markDone = function (id, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, errors: { _: '这条信息不存在或已被删除' } };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, errors: { _: '只有发布者本人可以更新状态' } };
+      }
+      if (post.status === 'done') {
+        return { ok: true, post: LF.toPublic(post, { viewerId: actor, unlocked: true }), unchanged: true };
+      }
+      return store.update(id, {
+        status: 'done',
+        doneType: LF.DONE_TYPES[post.type].key,
+        doneAt: now()
+      }, actor);
+    };
+
+    /** 撤回"已完成"，重新挂出来（东西又没找到、归还搞错了等）。 */
+    store.reopen = function (id, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, errors: { _: '这条信息不存在或已被删除' } };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, errors: { _: '只有发布者本人可以更新状态' } };
+      }
+      if (post.status === 'open') {
+        return { ok: true, post: LF.toPublic(post, { viewerId: actor, unlocked: true }), unchanged: true };
+      }
+      return store.update(id, { status: 'open', doneType: null, doneAt: null }, actor);
+    };
+
+    // ------------------------------------------------------------ 认领验证
+
+    /**
+     * 开始一次认领验证：从发布者设置的隐藏特征里随机抽题。
+     * 抽中的题目名记在 pendingClaim 里，提交时只认这组题，
+     * 避免认领人自己拼一组题反复试答案。
+     */
+    store.startClaim = function (id) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!needsVerify(post)) return { ok: false, message: '这条信息不需要验证，可以直接联系发布者' };
+      if (post.status === 'done') return { ok: false, message: '这条信息已完成，无需再认领' };
+      if (remainAttempts(post) <= 0) {
+        return { ok: false, locked: true, message: '尝试次数已用完，请申请人工核对' };
+      }
+
+      var unanswered = post.hidden.filter(function (item) { return item.a !== ''; });
+      var picked = U.pickRandom(unanswered, LF.VERIFY.pickCount, random());
+
+      var list = readPosts();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) {
+          list[i].pendingClaim = {
+            questions: picked.map(function (item) { return item.q; }),
+            at: now()
+          };
+          writePosts(list);
+          break;
+        }
+      }
+
+      return {
+        ok: true,
+        questions: picked.map(function (item) {
+          return { q: item.q, ask: LF.askOf(post.category, item.q) };
+        }),
+        remaining: remainAttempts(post),
+        maxAttempts: LF.VERIFY.maxAttempts
+      };
+    };
+
+    function remainAttempts(post) {
+      var left = Number(post.attemptsLeft);
+      if (isNaN(left)) left = LF.VERIFY.maxAttempts;
+      return U.clamp(left, 0, LF.VERIFY.maxAttempts);
+    }
+
+    /**
+     * 提交认领答案。
+     * @param {string} id
+     * @param {object|Array} answers 形如 { '卡面姓名': '王小明' } 或 [{ q, a }]
+     * @returns {{ok, passed, remaining, failed, voucher, contact|null, message}}
+     *
+     * 答案比对前会做归一化（去空格、全角转半角、忽略大小写与常见标点），
+     * 所以"王小明""王 小明""王小明。"都算对。
+     */
+    store.submitClaim = function (id, answers) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+
+      var pending = post.pendingClaim;
+      if (!pending || !pending.questions || !pending.questions.length) {
+        return { ok: false, message: '验证已失效，请重新进入认领页面' };
+      }
+
+      var left = remainAttempts(post);
+      if (left <= 0) {
+        return { ok: false, locked: true, remaining: 0, message: '尝试次数已用完，请申请人工核对' };
+      }
+
+      var answerMap = toAnswerMap(answers);
+      var hiddenMap = {};
+      post.hidden.forEach(function (item) { hiddenMap[item.q] = item.a; });
+
+      var failed = [];
+      pending.questions.forEach(function (q) {
+        var expected = U.normalizeAnswer(hiddenMap[q]);
+        var actual = U.normalizeAnswer(answerMap[q]);
+        if (!expected || expected !== actual) {
+          failed.push({ q: q, input: U.truncate(U.clean(answerMap[q]), 20) });
+        }
+      });
+
+      var passed = failed.length === 0;
+      var list = readPosts();
+      var updated = null;
+
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id !== id) continue;
+        var record = {
+          at: now(),
+          passed: passed,
+          answers: pending.questions.map(function (q) {
+            return { q: q, a: U.truncate(U.clean(answerMap[q]), 20) };
+          })
+        };
+
+        if (passed) {
+          record.voucher = U.voucherCode(id, pending.questions.join('|'), now());
+          list[i].claims = (list[i].claims || []).concat([record]);
+        } else {
+          list[i].claims = (list[i].claims || []).concat([record]);
+          list[i].attemptsLeft = left - 1;
+        }
+        delete list[i].pendingClaim;
+        updated = list[i];
+        break;
+      }
+
+      writePosts(list);
+
+      if (!passed) {
+        return {
+          ok: true,
+          passed: false,
+          remaining: left - 1,
+          maxAttempts: LF.VERIFY.maxAttempts,
+          failed: failed,
+          locked: left - 1 <= 0
+        };
+      }
+
+      // 通过：记下解锁状态，之后同一台设备再看这条信息可以直接看到联系方式
+      var voucher = U.voucherCode(id, pending.questions.join('|'), now());
+      store.markUnlocked(id, voucher);
+      var fresh = findPost(id);
+
+      return {
+        ok: true,
+        passed: true,
+        remaining: left,
+        voucher: voucher,
+        verifiedLabels: pending.questions.slice(),
+        contact: {
+          name: fresh.contactName,
+          dept: fresh.contactDept,
+          way: fresh.contactWay
+        }
+      };
+    };
+
+    function toAnswerMap(answers) {
+      var map = {};
+      if (Array.isArray(answers)) {
+        answers.forEach(function (item) {
+          if (item && item.q) map[item.q] = item.a == null ? '' : item.a;
+        });
+      } else if (answers && typeof answers === 'object') {
+        for (var key in answers) {
+          if (Object.prototype.hasOwnProperty.call(answers, key)) map[key] = answers[key];
+        }
+      }
+      return map;
+    }
+
+    /** 查看某条信息已经收到的认领申请（只有发布者能看）。 */
+    store.listClaims = function (id, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, message: '只有发布者本人可以查看认领申请' };
+      }
+      return {
+        ok: true,
+        claims: (post.claims || []).map(function (item) {
+          return {
+            at: item.at,
+            passed: item.passed,
+            answers: item.answers || [],
+            voucher: item.voucher || ''
+          };
+        }),
+        remaining: remainAttempts(post),
+        hiddenLabels: post.hidden.map(function (item) { return item.q; })
+      };
+    };
+
+    // ------------------------------------------------------------ 解锁状态（认领人本机）
+
+    store.readUnlocked = function () {
+      var list = readJson(LF.KEYS.unlocked, []);
+      return Array.isArray(list) ? list : [];
+    };
+
+    store.isUnlocked = function (id) {
+      return store.readUnlocked().some(function (item) { return item && item.id === id; });
+    };
+
+    store.unlockInfo = function (id) {
+      var found = store.readUnlocked().filter(function (item) { return item && item.id === id; })[0];
+      return found || null;
+    };
+
+    store.markUnlocked = function (id, voucher) {
+      var list = store.readUnlocked().filter(function (item) { return item && item.id !== id; });
+      list.push({ id: id, voucher: voucher || '', at: now() });
+      writeJson(LF.KEYS.unlocked, list);
+      return list;
+    };
+
+    store.forgetUnlocked = function (id) {
+      var list = store.readUnlocked().filter(function (item) { return item && item.id !== id; });
+      writeJson(LF.KEYS.unlocked, list);
+      return list;
+    };
+
+    /**
+     * 暂存最近一次认领验证的结果。
+     * 验证页和结果页是两个独立页面，跳转时会丢掉内存里的变量，
+     * 所以把结果落一次盘，结果页读出来渲染即可（只用于展示，不参与判定）。
+     */
+    store.saveLastClaim = function (data) {
+      writeJson(LF.KEYS.lastClaim, data);
+      return data;
+    };
+
+    store.readLastClaim = function () {
+      var data = readJson(LF.KEYS.lastClaim, null);
+      return (data && typeof data === 'object') ? data : null;
+    };
+
+    // ------------------------------------------------------------ 搜索历史
+
+    store.readHistory = function () {
+      var list = readJson(LF.KEYS.history, []);
+      return Array.isArray(list) ? list.filter(function (w) { return typeof w === 'string' && w !== ''; }) : [];
+    };
+
+    /** 记录一次搜索：去重（已有的挪到最前）并限制最多 HISTORY_MAX 条。 */
+    store.pushHistory = function (word) {
+      var w = U.clean(word);
+      if (!w) return store.readHistory();
+      var list = store.readHistory().filter(function (item) { return item !== w; });
+      list.unshift(w);
+      list = list.slice(0, LF.HISTORY_MAX);
+      writeJson(LF.KEYS.history, list);
+      return list;
+    };
+
+    store.removeHistory = function (word) {
+      var list = store.readHistory().filter(function (item) { return item !== word; });
+      writeJson(LF.KEYS.history, list);
+      return list;
+    };
+
+    store.clearHistory = function () {
+      writeJson(LF.KEYS.history, []);
+      return [];
+    };
+
+    /** 热门搜索：优先统计真实数据里出现过的分类名，不够再用预置词补。 */
+    store.hotWords = function (limit) {
+      var posts = readPosts();
+      var counter = {};
+      posts.forEach(function (post) {
+        var name = LF.categoryOf(post.category).name;
+        counter[name] = (counter[name] || 0) + 1;
+      });
+      var ranked = Object.keys(counter).sort(function (a, b) { return counter[b] - counter[a]; });
+      var merged = U.unique(ranked.concat(LF.HOT_WORDS));
+      return merged.slice(0, limit || 7);
+    };
+
+    // ------------------------------------------------------------ 本机身份
+
+    store.getMe = function () {
+      var me = readJson(LF.KEYS.me, null);
+      return (me && typeof me === 'object') ? me : { name: '', dept: '', way: '' };
+    };
+
+    store.saveMe = function (me) {
+      var data = {
+        name: U.clean(me && me.name),
+        dept: U.clean(me && me.dept),
+        way: U.clean(me && me.way)
+      };
+      writeJson(LF.KEYS.me, data);
+      return data;
+    };
+
+    /** 本机唯一 id：第一次访问时生成并存下来，用于判断"我的发布"。 */
+    store.myId = function () {
+      var id = readJson(LF.KEYS.uid, '');
+      if (typeof id !== 'string' || !id) {
+        id = U.uid('me');
+        writeJson(LF.KEYS.uid, id);
+      }
+      return id;
+    };
+
+    // ------------------------------------------------------------ 统计与维护
+
+    store.stats = function () {
+      var posts = readPosts();
+      var open = posts.filter(function (p) { return p.status === 'open'; }).length;
+      return {
+        total: posts.length,
+        open: open,
+        done: posts.length - open,
+        lost: posts.filter(function (p) { return p.type === 'lost'; }).length,
+        found: posts.filter(function (p) { return p.type === 'found'; }).length
+      };
+    };
+
+    /** 估算本地占用，用于"存储空间"提示。 */
+    store.usage = function () {
+      var raw = '';
+      try { raw = storage.getItem(LF.KEYS.posts) || ''; } catch (e) { raw = ''; }
+      // localStorage 按 UTF-16 计，一个字符 2 字节
+      return { chars: raw.length, bytes: raw.length * 2 };
+    };
+
+    /** 清空全部数据并重新灌入演示数据，方便演示前复位。 */
+    store.resetAll = function (seedPosts) {
+      writeJson(LF.KEYS.posts, seedPosts || seed);
+      writeJson(LF.KEYS.history, []);
+      writeJson(LF.KEYS.unlocked, []);
+      return { ok: true };
+    };
+
+    /** 导出全部数据（调试与备份用）。 */
+    store.exportAll = function () {
+      return {
+        version: LF.DATA_VERSION,
+        posts: readPosts(),
+        history: store.readHistory(),
+        unlocked: store.readUnlocked()
+      };
+    };
+
+    return store;
+  };
+
+  // ================================================================ 单例
+
+  /**
+   * 页面统一用这个函数拿 store：自动选存储、铸造本机身份、首次运行灌演示数据。
+   *
+   * 注意顺序：先生成 myId 再灌数据，演示数据里那两条"归属于我"的信息
+   * 才能挂到本机 uid 上，「我的发布」打开就有内容。
+   *
+   * @returns {{store, adapter, myId, seeded, persistent}}
+   */
+  LF.bootstrap = function () {
+    var adapter = LF.createBrowserAdapter();
+    var store = LF.createStore(adapter);
+    var myId = store.myId();
+    var seedPosts = LF.buildSeedPosts ? LF.buildSeedPosts(new Date(), myId) : [];
+    var seeded = store.init(seedPosts);
+    return {
+      store: store,
+      adapter: adapter,
+      myId: myId,
+      seeded: seeded.seeded,
+      persistent: adapter.persistent !== false
+    };
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
