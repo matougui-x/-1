@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>校园失物招领 · 首页</title>
+  <meta name="description" content="集中发布和查找校园失物招领信息，按关键词、分类、地点快速筛选。">
+  <!-- 必须最先加载：收集本页的 JS 报错，供开发自检 -->
+  <script src="js/error-hook.js"></script>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- 手机端品牌条（桌面由顶部导航栏代替） -->
+  <div class="mobile-head">
+    <span class="brand-mark">🔎</span>
+    <span class="brand-name">校园失物招领</span>
+    <a class="head-action" href="search.html" aria-label="搜索">🔍</a>
+  </div>
+
+  <div class="page">
+
+    <!-- 手机端搜索入口。
+         注意这里用的是 searchbox-entry 而不是 searchbox：
+         search.html 里真正的输入框用了 .searchbox，两者不能混用同一个类名，
+         否则在桌面端隐藏入口时会把搜索页的输入框一起藏掉。 -->
+    <a class="searchbox searchbox-entry" href="search.html" style="margin-top:4px">
+      <span>🔍</span><span>搜索校园卡、钥匙、雨伞、耳机…</span>
+    </a>
+
+    <!-- 信息类型：全部 / 寻物 / 招领（手机与桌面共用） -->
+    <div class="segmented type-seg mt-12" id="typeSeg" role="tablist" aria-label="信息类型">
+      <button type="button" data-type="all" class="is-on" role="tab">全部</button>
+      <button type="button" data-type="lost" role="tab">寻物</button>
+      <button type="button" data-type="found" role="tab">招领</button>
+    </div>
+
+    <div class="layout-main has-side mt-16">
+
+      <!-- 桌面端筛选侧栏 -->
+      <aside class="side-panel" aria-label="筛选">
+        <div class="side-group">
+          <h3>物品分类</h3>
+          <div class="side-list" id="sideCategory"></div>
+        </div>
+        <div class="side-group">
+          <h3>地点</h3>
+          <div class="side-list" id="sideArea"></div>
+        </div>
+        <div class="side-group">
+          <h3>状态</h3>
+          <div class="side-list" id="sideStatus"></div>
+        </div>
+        <div class="side-group">
+          <div class="mini-stats" id="sideStats"></div>
+          <a class="btn btn-primary btn-block btn-sm" href="publish.html">＋ 发布信息</a>
+        </div>
+      </aside>
+
+      <main>
+        <!-- 手机端分类快捷入口 -->
+        <div class="cat-strip" id="catStrip" role="group" aria-label="按物品分类筛选"></div>
+
+        <!-- 手机端筛选：地点 + 状态 -->
+        <div class="filter-row" id="mobileFilters">
+          <select class="filter-select" id="fAreaMobile" aria-label="按地点筛选"></select>
+          <select class="filter-select" id="fStatusMobile" aria-label="按状态筛选"></select>
+        </div>
+
+        <div class="section-head">
+          <h2 id="listTitle">最新信息</h2>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="count" id="listCount"></span>
+            <select class="filter-select" id="sortSelect" style="flex:0 0 auto;width:auto" aria-label="排序方式"></select>
+          </div>
+        </div>
+
+        <div id="list"></div>
+
+        <!-- 筛选后为空时，"清空筛选"是个按钮而不是链接，所以放在列表外侧 -->
+        <div class="text-center mt-16" id="resetWrap" hidden>
+          <button type="button" class="link-btn" id="resetFilters">清空全部筛选条件</button>
+        </div>
+      </main>
+
+    </div>
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/store.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/page-home.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>我的发布 · 校园失物招领</title>
+  <script src="js/error-hook.js"></script>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+</head>
+<body>
+
+<div class="app">
+
+  <div class="page-bar">
+    <a class="back" href="index.html" aria-label="返回">‹</a>
+    <h1>我的发布</h1>
+  </div>
+
+  <div class="page">
+
+    <div class="mobile-head" style="padding:0 0 12px;border:none;background:none">
+      <span class="brand-mark">👤</span>
+      <span class="brand-name" style="font-size:15px">我发布的信息</span>
+      <a class="head-action" href="publish.html" aria-label="发布信息">＋</a>
+    </div>
+
+    <div class="segmented mine-tabs" id="mineTabs" role="tablist" aria-label="信息状态">
+      <button type="button" data-status="open" class="is-on" role="tab">进行中</button>
+      <button type="button" data-status="done" role="tab">已完成</button>
+    </div>
+
+    <div class="layout-main">
+      <div id="list"></div>
+    </div>
+
+    <!-- 本地数据维护：解释数据存在哪、占用多少、怎么复位 -->
+    <div class="panel mt-24" id="dataPanel">
+      <div class="section-head"><h2>本地数据</h2><span class="count" id="usageText"></span></div>
+      <p class="text-small text-muted">
+        这个程序没有服务器，你发布的信息保存在本机浏览器里，换一台电脑或换一个浏览器都看不到，
+        清除浏览器数据也会丢失。演示前如果想恢复到初始状态，可以点下面的按钮。
+      </p>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost btn-sm" id="exportBtn">导出数据</button>
+        <button type="button" class="btn btn-danger btn-sm" id="resetBtn">恢复演示数据</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/store.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/page-mine.js"></script>
+</body>
+</html>
