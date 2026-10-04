@@ -69,10 +69,18 @@
           <div class="field-error"></div>
         </div>
 
+        <div class="field" data-field="features">
+          <label class="field-label">公开特征<span class="req">*</span><span class="text-muted" style="font-weight:400">（至少填一项）</span></label>
+          <div id="publicFeatures"></div>
+          <div class="field-error"></div>
+          <div class="field-hint" id="publicHint"></div>
+          <div class="field-hint" id="publicWarn" style="color:var(--orange-d);font-weight:500" hidden></div>
+        </div>
+
         <div class="field" data-field="description">
-          <label class="field-label" for="fDesc">物品描述<span class="text-muted" style="font-weight:400">（选填）</span></label>
+          <label class="field-label" for="fDesc">补充说明<span class="text-muted" style="font-weight:400">（选填）</span></label>
           <textarea class="textarea" id="fDesc" name="description" maxlength="300"
-                    placeholder="补充一些细节，比如物品当时的状态、你捡到后放在哪里了。注意不要写出隐藏特征的答案。"></textarea>
+                    placeholder="补充一些细节，比如物品当时的状态、你捡到后放在哪里了。"></textarea>
           <div class="field-error"></div>
           <div class="field-counter"><span id="descCount">0</span>/300</div>
         </div>
