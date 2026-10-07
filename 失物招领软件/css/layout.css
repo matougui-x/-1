@@ -1,0 +1,829 @@
+/*!
+ * 响应式布局
+ *
+ * 同一套 HTML 兼顾两种形态，靠媒体查询在 900px 处切换：
+ *   ≥900px  桌面：顶部导航栏 + 居中内容区 + 卡片多列网格 + 左侧筛选栏
+ *   <900px  手机：沿用原型观感，底部 Tab 栏（首页 / ＋ / 我的），单列卡片
+ *
+ * 顶栏和底部 Tab 栏用 display 互斥切换，而不是靠定位硬撑，
+ * 这样 position:fixed 的元素只会在其中一种形态下存在，不会互相打架。
+ */
+
+/* ================================================================ 顶部导航（桌面） */
+
+.topbar {
+  display: none;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.topbar-inner {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  height: var(--topbar-h);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--green-grad);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  box-shadow: var(--sh-green);
+}
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.topnav a {
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.topnav a:hover {
+  background: var(--bg);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.topnav a.is-on {
+  background: var(--green-l);
+  color: var(--green-d);
+  font-weight: 600;
+}
+
+/* ================================================================ 底部 Tab 栏（手机） */
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--tabbar-h);
+  background: var(--white);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: stretch;
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tabbar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.tabbar-item:hover {
+  text-decoration: none;
+}
+
+.tabbar-item .g {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.tabbar-item.is-on {
+  color: var(--green);
+}
+
+/* 中间凸起的发布按钮 */
+.tabbar-mid {
+  flex: 0 0 84px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.tabbar-mid .ball {
+  width: 48px;
+  height: 48px;
+  margin-top: -13px;
+  border-radius: 50%;
+  background: var(--green-grad);
+  color: #fff;
+  font-size: 25px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--sh-green);
+}
+
+.tabbar-mid:hover {
+  text-decoration: none;
+}
+
+/* ================================================================ 页面容器 */
+
+.app {
+  padding-bottom: calc(var(--tabbar-h) + 24px);
+}
+
+.page {
+  padding: 14px 16px 0;
+}
+
+/* 详情、发布、验证这类"一列到底"的页面，桌面下收窄居中才好读 */
+.page-narrow {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.panel {
+  background: var(--white);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  box-shadow: var(--sh-1);
+}
+
+.panel + .panel {
+  margin-top: 12px;
+}
+
+/* 手机端页面导航条（标题 + 返回） */
+.page-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.page-bar .back {
+  font-size: 20px;
+  color: var(--ink);
+  line-height: 1;
+  padding: 4px 6px 4px 0;
+}
+
+.page-bar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-bar .bar-action {
+  font-size: 13px;
+  color: var(--ink-2);
+  flex: 0 0 auto;
+}
+
+/* 底部固定操作条 */
+.action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--white);
+  border-top: 1px solid var(--line);
+  z-index: 45;
+}
+
+.action-bar .btn {
+  flex: 1;
+}
+
+.action-bar .btn-ghost {
+  flex: 0 0 40%;
+}
+
+/* 有底部操作条的页面，正文要留出位置，别被盖住 */
+.has-action-bar {
+  padding-bottom: 96px;
+}
+
+/* 不带底部 Tab 栏的页面（详情、发布、认领验证等，底部有自己的操作条） */
+body.no-tabbar .app {
+  padding-bottom: 24px;
+}
+
+body.no-tabbar .toast-wrap {
+  bottom: 16px;
+}
+
+/* ================================================================ 首页 / 搜索页两栏布局 */
+
+.layout-main {
+  display: block;
+}
+
+.side-panel {
+  display: none;
+}
+
+/* 分类快捷入口（横向图标条） */
+.cat-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 12px 0 4px;
+  scrollbar-width: none;
+}
+
+.cat-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.cat-item {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 62px;
+  padding: 6px 2px;
+  border-radius: var(--r-md);
+  font-size: 11px;
+  color: var(--ink-2);
+  background: none;
+  transition: background .15s ease;
+}
+
+.cat-item:hover {
+  background: var(--white);
+}
+
+.cat-item.is-on {
+  background: var(--white);
+  color: var(--green-d);
+  font-weight: 600;
+}
+
+.cat-item .ico {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--green-l);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+/* 手机端顶部的品牌条（桌面由顶部导航栏承担同样的作用） */
+.mobile-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 16px;
+  background: var(--white);
+  border-bottom: 1px solid var(--line);
+}
+
+.mobile-head .brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--green-grad);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+
+.mobile-head .brand-name {
+  font-size: 16px;
+  font-weight: 700;
+  flex: 1;
+}
+
+.mobile-head .head-action {
+  font-size: 19px;
+  line-height: 1;
+  padding: 4px;
+}
+
+/* 手机端的筛选行：三个紧凑下拉 */
+.filter-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 10px;
+}
+
+.filter-select {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 28px 0 11px;
+  font-size: 13px;
+  color: var(--ink-2);
+  background-color: var(--white);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%239AA3AE' d='M1.4 0 6 4.6 10.6 0 12 1.4 6 7.4 0 1.4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px;
+  outline: none;
+}
+
+.filter-select:focus {
+  border-color: var(--green);
+}
+
+/* 搜索框 */
+.searchbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 15px;
+  border-radius: var(--r-pill);
+  background: var(--white);
+  border: 1px solid transparent;
+  color: var(--ink-3);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+
+.searchbox:hover {
+  border-color: var(--green);
+}
+
+.searchbox.is-active {
+  border-color: var(--green);
+  color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(18, 168, 122, .1);
+}
+
+.searchbox input {
+  flex: 1;
+  /* 撑满整个搜索框的高度，而不是只有中间一条能点中。
+     默认 align-items:center 会让 input 只有文字行那么高（约 19px），
+     用户在框内上下部分点击时焦点进不去，手机上尤其明显。 */
+  align-self: stretch;
+  border: none;
+  outline: none;
+  background: none;
+  font-size: 14px;
+  min-width: 0;
+  color: var(--ink);
+}
+
+/* 搜索页的历史 / 热词 */
+.word-block {
+  padding: 14px 0 4px;
+}
+
+.word-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.word-block-head h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.chip-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-cloud button {
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--white);
+  border: 1px solid var(--line-2);
+  padding: 7px 13px;
+  border-radius: var(--r-pill);
+  transition: all .15s ease;
+}
+
+.chip-cloud button:hover {
+  border-color: var(--green);
+  color: var(--green-d);
+}
+
+.chip-cloud button.is-hot {
+  color: var(--orange-d);
+}
+
+/* ================================================================ 发布表单 */
+
+.form-section {
+  background: var(--white);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  box-shadow: var(--sh-1);
+  margin-bottom: 12px;
+}
+
+.form-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-section-title .sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+/* 认领验证题区块整体用米黄底，提示"这块内容只有答对的人才看得到联系方式" */
+.form-section.is-locked {
+  background: #FFFDF6;
+  border: 1px solid var(--lock-line);
+}
+
+.form-section.is-locked .form-section-title {
+  color: var(--lock-ink);
+}
+
+/* 照片上传 */
+.photo-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.photo-slot {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.photo-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-slot .remove {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(20, 28, 36, .62);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.photo-add {
+  width: 76px;
+  height: 76px;
+  border-radius: var(--r-md);
+  background: var(--bg);
+  border: 1px dashed #D6DCE3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.photo-add:hover {
+  border-color: var(--green);
+  color: var(--green-d);
+}
+
+.photo-add .plus {
+  font-size: 22px;
+  line-height: 1;
+  color: #B7BEC7;
+}
+
+/* ================================================================ 发布成功页 */
+
+.success-box {
+  text-align: center;
+  padding: 34px 22px 4px;
+}
+
+.success-box .tick {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--green-l);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 38px;
+  margin: 0 auto 20px;
+}
+
+.success-box h2 {
+  font-size: 21px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.success-box p {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.75;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+/* ================================================================ 我的发布 */
+
+.mine-tabs {
+  margin: 12px 0;
+}
+
+.mine-item {
+  background: var(--white);
+  border-radius: var(--r-lg);
+  padding: 15px 16px;
+  box-shadow: var(--sh-1);
+}
+
+.mine-item + .mine-item {
+  margin-top: 12px;
+}
+
+.mine-item .mine-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 9px;
+  display: flex;
+  align-items: center;
+}
+
+.mine-item .mine-meta {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-bottom: 11px;
+  line-height: 1.8;
+}
+
+.mine-item .mine-ops {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mine-item.is-done .mine-title {
+  color: var(--ink-2);
+}
+
+/* 统计小条 */
+.mini-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 2px 0 10px;
+}
+
+.mini-stats b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ================================================================ 桌面端适配 */
+
+@media (min-width: 900px) {
+  .topbar {
+    display: block;
+  }
+
+  .tabbar {
+    display: none;
+  }
+
+  /* 桌面下用顶栏导航，不需要给底部 Tab 栏让位 */
+  .app {
+    padding-bottom: 48px;
+  }
+
+  /* 桌面下页面容器居中并限宽。
+     宽度取 --page-max 加上左右 padding，这样容器内的内容区正好等于 --page-max，
+     页面内的分段控件、侧栏、卡片网格才能左右对齐。 */
+  .page {
+    max-width: calc(var(--page-max) + 48px);
+    margin: 0 auto;
+    padding: 22px 24px 0;
+  }
+
+  /* 手机端的页面导航条在桌面隐藏（顶栏已经提供了导航） */
+  .page-bar {
+    display: none;
+  }
+
+  /* 手机端专属的部件在桌面隐藏，改由侧栏和顶栏承担。
+     注意只隐藏首页那个"搜索框样子"的入口链接（searchbox-entry），
+     不能连 .searchbox 一起隐藏——搜索页真正的输入框用的就是这个类。 */
+  .mobile-head,
+  .filter-row,
+  .cat-strip,
+  .searchbox-entry {
+    display: none;
+  }
+
+  /* 分段控件在桌面不需要占满整行，撑满会显得很空；靠左对齐，和下面的内容对齐 */
+  .type-seg,
+  .mine-tabs {
+    max-width: 380px;
+    margin-bottom: 16px;
+  }
+
+  /* 桌面下把"一列到底"的页面收窄居中 */
+  .page-narrow {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  /* 首页 / 搜索：左侧筛选栏 + 右侧内容 */
+  .layout-main.has-side {
+    display: grid;
+    grid-template-columns: 236px 1fr;
+    gap: 24px;
+    align-items: start;
+    max-width: var(--page-max);
+    margin: 0 auto;
+  }
+
+  .side-panel {
+    display: block;
+    background: var(--white);
+    border-radius: var(--r-lg);
+    padding: 16px;
+    box-shadow: var(--sh-1);
+    position: sticky;
+    top: calc(var(--topbar-h) + 22px);
+  }
+
+  .side-panel h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin-bottom: 12px;
+  }
+
+  .side-panel .side-group + .side-group {
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+
+  .side-panel .side-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .side-panel .side-list button {
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: var(--r-sm);
+    font-size: 13.5px;
+    color: var(--ink-2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    transition: background .15s ease;
+  }
+
+  .side-panel .side-list button:hover {
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  .side-panel .side-list button.is-on {
+    background: var(--green-l);
+    color: var(--green-d);
+    font-weight: 600;
+  }
+
+  .side-panel .side-list .n {
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  /* 卡片多列网格 */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .card-grid .card {
+    margin: 0;
+  }
+
+  /* 桌面下表单区块更宽松 */
+  .form-section {
+    padding: 20px 22px;
+  }
+
+  .action-bar {
+    position: static;
+    max-width: 760px;
+    margin: 16px auto 0;
+    padding: 0;
+    border-top: none;
+    background: none;
+  }
+
+  /* 单列页面的底部按钮在桌面上是有左浮动感的普通按钮条 */
+  .action-bar .btn {
+    flex: 0 1 auto;
+    min-width: 160px;
+  }
+
+  .action-bar .btn-ghost {
+    flex: 0 0 auto;
+  }
+
+  .has-action-bar {
+    padding-bottom: 0;
+  }
+
+  .toast-wrap {
+    bottom: 32px;
+  }
+}
+
+/*
+ * 更宽的屏幕上才排三列。1280 一档太挤：卡片里"时间 + 状态标签"会被迫折行，
+ * 看着比两列还乱，所以把三列的门槛提到 1500px（此时侧栏之外还有约 1200px 可用）。
+ */
+@media (min-width: 1500px) {
+  .card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* 桌面下若没有侧栏（我的发布、成功页等），内容居中收窄 */
+@media (min-width: 900px) {
+  .layout-main:not(.has-side) {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+}

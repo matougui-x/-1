@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1080" viewBox="0 0 900 1080" font-family="'Microsoft YaHei','PingFang SC',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8A94A0"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#12A87A"/>
+    </marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D98209"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="1080" fill="#F4F6F8"/>
+  <text x="40" y="44" font-size="22" font-weight="bold" fill="#1B1F23">认领验证流程图（纯客观题 + 限制次数）</text>
+  <text x="40" y="68" font-size="13" fill="#5A6470">把「谁有资格看到联系方式」从口头约定变成程序判断；3 次答不对，转人工审核</text>
+
+  <!-- 开始 -->
+  <rect x="330" y="92" width="140" height="40" rx="20" fill="#12A87A"/>
+  <text x="400" y="118" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">开始</text>
+
+  <path d="M 400 132 L 400 158" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 入口 -->
+  <rect x="230" y="160" width="340" height="52" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="400" y="192" font-size="13.5" fill="#1B1F23" text-anchor="middle">在信息详情页点击「🔒 我要认领（需验证）」</text>
+
+  <path d="M 400 212 L 400 236" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 判断 1：需要验证吗 -->
+  <path d="M 400 240 L 540 300 L 400 360 L 260 300 Z" fill="#FFFFFF" stroke="#8A94A0" stroke-width="1.5"/>
+  <text x="400" y="306" font-size="13" fill="#1B1F23" text-anchor="middle">这条信息需要验证吗？</text>
+
+  <path d="M 540 300 L 700 300" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+  <text x="620" y="291" font-size="12" fill="#9AA3AE" text-anchor="middle">否</text>
+  <rect x="704" y="274" width="164" height="52" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="786" y="296" font-size="12.5" fill="#1B1F23" text-anchor="middle">直接显示联系方式</text>
+  <text x="786" y="314" font-size="11.5" fill="#9AA3AE" text-anchor="middle">（寻物信息走这条）</text>
+
+  <path d="M 400 360 L 400 386" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+  <text x="414" y="378" font-size="12" fill="#9AA3AE">是</text>
+
+  <!-- 判断 2：还有次数吗 -->
+  <path d="M 400 390 L 540 450 L 400 510 L 260 450 Z" fill="#FFF9EC" stroke="#D98209" stroke-width="1.5"/>
+  <text x="400" y="446" font-size="13" fill="#1B1F23" text-anchor="middle">剩余作答次数 &gt; 0 ？</text>
+  <text x="400" y="466" font-size="11.5" fill="#B26A00" text-anchor="middle">（初始 3 次，答对不消耗）</text>
+
+  <path d="M 540 450 L 700 450" stroke="#D98209" stroke-width="2" marker-end="url(#ao)"/>
+  <text x="620" y="441" font-size="12" fill="#D98209" text-anchor="middle">否</text>
+  <rect x="704" y="424" width="164" height="52" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="786" y="446" font-size="12.5" fill="#8A6100" text-anchor="middle">已锁定</text>
+  <text x="786" y="464" font-size="11.5" fill="#B26A00" text-anchor="middle">解锁【提交申诉】按钮</text>
+
+  <!-- 申诉通道（右侧） -->
+  <path d="M 786 476 L 786 500" stroke="#D98209" stroke-width="2" marker-end="url(#ao)"/>
+  <rect x="664" y="502" width="204" height="56" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="766" y="524" font-size="12.5" fill="#8A6100" text-anchor="middle">申诉表单</text>
+  <text x="766" y="543" font-size="11.5" fill="#B26A00" text-anchor="middle">物品细节 + 联系方式</text>
+
+  <path d="M 766 558 L 766 582" stroke="#D98209" stroke-width="2" marker-end="url(#ao)"/>
+  <rect x="664" y="584" width="204" height="56" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="766" y="606" font-size="12.5" fill="#8A6100" text-anchor="middle">发布者人工审核</text>
+  <text x="766" y="625" font-size="11.5" fill="#B26A00" text-anchor="middle">「我的发布」里逐条处理</text>
+
+  <path d="M 766 640 L 766 664" stroke="#12A87A" stroke-width="2" marker-end="url(#ag)"/>
+  <rect x="664" y="666" width="204" height="52" rx="10" fill="#E6F6F0" stroke="#12A87A" stroke-width="1.5"/>
+  <text x="766" y="688" font-size="12.5" fill="#0E8F68" text-anchor="middle">同意交还</text>
+  <text x="766" y="706" font-size="11.5" fill="#0E8F68" text-anchor="middle">解锁联系方式 + 生成交接编号</text>
+
+  <path d="M 664 612 L 644 612 L 644 758 L 660 758" stroke="#D98209" stroke-width="2" fill="none" stroke-dasharray="7 4" marker-end="url(#ao)"/>
+  <rect x="664" y="734" width="204" height="48" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="766" y="755" font-size="12.5" fill="#8A6100" text-anchor="middle">驳回 + 一句说明</text>
+  <text x="766" y="773" font-size="11.5" fill="#B26A00" text-anchor="middle">结论回给申诉人</text>
+
+  <path d="M 400 510 L 400 536" stroke="#12A87A" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="414" y="528" font-size="12" fill="#0E8F68">是</text>
+
+  <!-- 展示题目 -->
+  <rect x="230" y="538" width="340" height="62" rx="10" fill="#FFFFFF" stroke="#B7E6D5"/>
+  <text x="400" y="561" font-size="13.5" fill="#1B1F23" text-anchor="middle" font-weight="bold">展示发布者出的全部题目</text>
+  <text x="400" y="581" font-size="11.5" fill="#5A6470" text-anchor="middle">判断题固定「正确 / 错误」；选择题 2–4 个选项</text>
+  <text x="400" y="596" font-size="11.5" fill="#B26A00" text-anchor="middle">题目对象里没有 answer，前端拿不到正确答案</text>
+
+  <path d="M 400 600 L 400 624" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 一次性作答 -->
+  <rect x="230" y="626" width="340" height="62" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="400" y="649" font-size="13.5" fill="#1B1F23" text-anchor="middle">认领者一次性选完全部题目并提交</text>
+  <text x="400" y="669" font-size="11.5" fill="#9AA3AE" text-anchor="middle">每题只能点选项，没有自由文本</text>
+  <text x="400" y="684" font-size="11.5" fill="#9AA3AE" text-anchor="middle">有题目没选时提示补选，不消耗次数</text>
+
+  <path d="M 400 688 L 400 712" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 统一判定 -->
+  <rect x="230" y="714" width="340" height="56" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="400" y="737" font-size="13.5" fill="#1B1F23" text-anchor="middle">数据层统一判定（逐题比对选项下标）</text>
+  <text x="400" y="757" font-size="11.5" fill="#9AA3AE" text-anchor="middle">全部答对才算通过，判定过程不离开数据层</text>
+
+  <path d="M 400 770 L 400 794" stroke="#8A94A0" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 判断 3：全对？ -->
+  <path d="M 400 798 L 540 858 L 400 918 L 260 858 Z" fill="#FFFFFF" stroke="#8A94A0" stroke-width="1.5"/>
+  <text x="400" y="864" font-size="13" fill="#1B1F23" text-anchor="middle">全部答对？</text>
+
+  <!-- 否：扣一次 -->
+  <path d="M 260 858 L 250 858" stroke="#D98209" stroke-width="2" marker-end="url(#ao)"/>
+  <text x="255" y="845" font-size="12" fill="#D98209" text-anchor="middle">否</text>
+  <rect x="30" y="820" width="214" height="76" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="137" y="844" font-size="12.5" fill="#8A6100" text-anchor="middle">扣 1 次作答机会</text>
+  <text x="137" y="864" font-size="11.5" fill="#B26A00" text-anchor="middle">只提示「回答的细节与描述不符」</text>
+  <text x="137" y="882" font-size="11.5" fill="#B26A00" text-anchor="middle">不指出是哪一题错</text>
+
+  <path d="M 137 820 L 137 450 L 256 450" stroke="#D98209" stroke-width="2" fill="none" stroke-dasharray="7 4" marker-end="url(#ao)"/>
+  <text x="121" y="640" font-size="12" fill="#B26A00" transform="rotate(-90 121 640)">次数用完后锁定并解锁申诉</text>
+
+  <!-- 是：通过 -->
+  <path d="M 400 918 L 400 940" stroke="#12A87A" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="414" y="935" font-size="12" fill="#0E8F68">是</text>
+
+  <rect x="200" y="944" width="400" height="66" rx="10" fill="#E6F6F0" stroke="#12A87A" stroke-width="1.5"/>
+  <text x="400" y="968" font-size="13.5" font-weight="bold" fill="#0E8F68" text-anchor="middle">生成认领凭证码 CL-YYYY-XXXX，解锁联系方式</text>
+  <text x="400" y="990" font-size="11.5" fill="#0E8F68" text-anchor="middle">本机记下「这条已解锁」，之后再看详情无需重复作答</text>
+
+  <!-- 侧栏说明 -->
+  <rect x="620" y="944" width="250" height="66" rx="10" fill="#FFFFFF" stroke="#D6DCE3"/>
+  <text x="745" y="966" font-size="12" fill="#1B1F23" text-anchor="middle">验证记录与申诉写回信息</text>
+  <text x="745" y="985" font-size="11.5" fill="#5A6470" text-anchor="middle">发布者能看到谁答过、答得对不对</text>
+  <text x="745" y="1002" font-size="11.5" fill="#5A6470" text-anchor="middle">认领记录与申诉明细只有发布者能看</text>
+
+  <!-- 图例 -->
+  <rect x="40" y="100" width="170" height="104" rx="10" fill="#FFFFFF" stroke="#EDF0F3"/>
+  <text x="54" y="122" font-size="12" font-weight="bold" fill="#5A6470">图例</text>
+  <path d="M 56 138 L 76 138 L 66 128 Z" fill="#FFFFFF" stroke="#8A94A0"/>
+  <text x="86" y="142" font-size="11.5" fill="#5A6470">判断分支</text>
+  <rect x="56" y="148" width="20" height="14" rx="4" fill="#FFF9EC" stroke="#F0D9A8"/>
+  <text x="86" y="159" font-size="11.5" fill="#5A6470">失败 / 阻断路径</text>
+  <rect x="56" y="166" width="20" height="14" rx="4" fill="#E6F6F0" stroke="#12A87A"/>
+  <text x="86" y="177" font-size="11.5" fill="#5A6470">成功路径</text>
+  <path d="M 56 190 L 76 190" stroke="#D98209" stroke-width="2" stroke-dasharray="6 3"/>
+  <text x="86" y="194" font-size="11.5" fill="#5A6470">回到前置步骤</text>
+</svg>

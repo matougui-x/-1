@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>搜索 · 校园失物招领</title>
+  <script src="js/error-hook.js"></script>
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+</head>
+<body>
+
+<div class="app">
+
+  <div class="page-bar">
+    <a class="back" href="index.html" aria-label="返回">‹</a>
+    <h1>搜索</h1>
+  </div>
+
+  <div class="page">
+
+    <!-- 搜索输入 -->
+    <div class="searchbox is-active" style="margin-top:4px">
+      <span>🔍</span>
+      <input type="search" id="searchInput" placeholder="搜索校园卡、钥匙、雨伞、耳机…"
+             autocomplete="off" aria-label="搜索关键词" enterkeyhint="search">
+      <button type="button" class="link-muted" id="clearInput" hidden aria-label="清空">✕</button>
+    </div>
+
+    <!-- 还没开始搜索时显示：历史 + 热门 -->
+    <div id="idlePanel">
+      <div class="word-block" id="historyBlock" hidden>
+        <div class="word-block-head">
+          <h3>搜索历史</h3>
+          <button type="button" class="link-muted" id="clearHistory">清空</button>
+        </div>
+        <div class="chip-cloud" id="historyCloud"></div>
+      </div>
+
+      <div class="word-block">
+        <div class="word-block-head"><h3>大家都在搜</h3></div>
+        <div class="chip-cloud" id="hotCloud"></div>
+      </div>
+
+      <div class="panel mt-16">
+        <div class="section-head"><h2>找不到？试试这些办法</h2></div>
+        <ul class="text-small text-muted" style="line-height:2;padding-left:2px">
+          <li>· 换更短的关键词：「校园卡」比「我的校园卡丢了」更容易命中</li>
+          <li>· 多个关键词用空格分开，表示要同时满足，例如「耳机 图书馆」</li>
+          <li>· 也可以回首页按 <b>物品分类</b> 和 <b>地点</b> 筛选</li>
+          <li>· 还是没有？<a href="publish.html">发布一条寻物信息</a>，让捡到的同学找到你</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 搜索结果 -->
+    <div id="resultPanel" hidden>
+      <div class="section-head mt-16">
+        <h2 id="resultTitle">搜索结果</h2>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="count" id="resultCount"></span>
+          <select class="filter-select" id="sortSelect" style="flex:0 0 auto;width:auto" aria-label="排序方式"></select>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <span class="filter-label">类型</span>
+        <button type="button" class="filter-chip is-on" data-type="all">全部</button>
+        <button type="button" class="filter-chip" data-type="lost">寻物</button>
+        <button type="button" class="filter-chip" data-type="found">招领</button>
+        <span class="filter-spacer"></span>
+        <span class="filter-label" id="keywordHint"></span>
+      </div>
+
+      <div class="layout-main">
+        <div id="list"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/store.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/page-search.js"></script>
+</body>
+</html>
