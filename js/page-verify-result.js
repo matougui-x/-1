@@ -2,9 +2,11 @@
  * 认领结果页（验证通过 / 未通过）
  *
  * 通过时：给出认领凭证码 + 解锁后的联系方式，并提供一键复制。
- *         （第一次作业的原型里这个"复制联系方式"按钮点下去跳到了「我的」，
- *          语义上不对——这里改成留在原页复制并弹提示。）
- * 未通过时：明确告诉用户是哪几项答错了、还剩几次机会，以及什么是"人工核对"。
+ *
+ * 未通过时：★ 只回一句统一提示「回答的细节与描述不符」，不告诉认领者是哪一题错。
+ *   这是第二版方案里最关键的一条：一旦告诉了他错在哪题，他就能用"排除法"
+ *   在 3 次机会内把答案试出来，限制次数就形同虚设。
+ *   3 次机会用完（remaining = 0）时，这里才解锁【提交申诉】按钮，进入人工审核通道。
  */
 (function (root) {
   'use strict';
@@ -56,13 +58,14 @@
 
   function renderPassed(data) {
     var contact = data.contact || { name: post.contactName, dept: post.contactDept, way: post.contactWay };
+    var total = data.questionCount || post.questionCount;
 
     contentEl.innerHTML =
       '<div class="result-head is-ok">' +
         '<div class="tick">✓</div>' +
         '<h2>验证通过</h2>' +
-        '<p>' + data.verifiedLabels.length + ' / ' + data.verifiedLabels.length +
-          ' 个隐藏特征回答正确，联系方式已解锁，请尽快联系发布者完成线下交接。</p>' +
+        '<p>' + total + ' / ' + total + ' 道验证题全部答对，联系方式已解锁，' +
+          '请尽快联系发布者完成线下交接。</p>' +
       '</div>' +
 
       '<div class="voucher mt-24">' +
@@ -84,16 +87,17 @@
         '<div class="info-row"><span class="k">' + (post.type === 'found' ? '拾取地点' : '丢失地点') + '</span>' +
           '<span class="v">' + esc(post.location) +
           '<span class="sub">交接前请先和发布者约定时间</span></span></div>' +
-        '<div class="info-row"><span class="k">已校验特征</span>' +
-          '<span class="v">' + esc(data.verifiedLabels.join('、')) + '</span></div>' +
+        '<div class="info-row"><span class="k">已答对</span>' +
+          '<span class="v">' + total + ' 道验证题（判断题 ' + post.questionMix.judge +
+          ' · 选择题 ' + post.questionMix.choice + '）</span></div>' +
       '</div>' +
 
       '<div class="safe-tip mt-16"><span>🔒</span>' +
         '<span>请携带本人学生证或身份证领取；凭证码仅你自己可见，请勿转发他人。' +
         '建议约在图书馆、宿舍楼下等公共场所见面。</span></div>' +
 
-      '<p class="text-small text-muted mt-12">通过验证后你提交的答案不会公开，' +
-        '其他同学仍然无法看到这些隐藏特征。</p>' +
+      '<p class="text-small text-muted mt-12">通过验证后你提交的选项不会公开，' +
+        '其他同学仍然要自己答对全部题目才能看到发布者的联系方式。</p>' +
 
       '<div class="action-bar mt-24" style="position:static;padding:0;border:none;background:none">' +
         '<a class="btn btn-ghost" href="index.html">返回首页</a>' +
@@ -110,80 +114,69 @@
   // ---------------------------------------------------------------- 验证未通过
 
   function renderFailed(data) {
-    var left = data.remaining;
+    var left = Number(data.remaining);
+    if (isNaN(left)) left = post.attemptsLeft;
     var locked = left <= 0;
+    var myAppeal = post.myAppeal;
 
-    var answerRows = (data.failed || []).map(function (item) {
-      return '<div class="r">' +
-        '<span class="k">' + esc(item.q) + '</span>' +
-        '<span class="v bad">' + esc(item.input || '（未填）') + ' ✕</span>' +
-        '</div>';
-    }).join('');
+    var appealBlock = '';
+    if (locked) {
+      if (!myAppeal) {
+        appealBlock = '<div class="lockbox mt-16"><span class="ic">📮</span>' +
+          '<span>3 次作答机会已经用完，【提交申诉】按钮已经解锁。' +
+          '把你能提供的物品细节写清楚，发布者会人工判断是否把物品交还给你。' +
+          '<span class="lk">如果这件物品确实不是你的，请不要提交申诉，把机会留给真正的失主。</span></span></div>';
+      } else if (myAppeal.decision === 'pending') {
+        appealBlock = '<div class="lockbox mt-16"><span class="ic">⏳</span>' +
+          '<span>你已经提交过申诉，正在等待发布者人工审核。' +
+          '<span class="lk">审核结果会显示在申诉页面里，也可以回来重新打开本页查看。</span></span></div>';
+      } else if (myAppeal.decision === 'approved') {
+        appealBlock = '<div class="lockbox mt-16"><span class="ic">✅</span>' +
+          '<span>发布者已经<b>同意</b>你的申诉' +
+          (myAppeal.note ? '，留言：' + esc(myAppeal.note) : '') + '。' +
+          '联系方式已经解锁，回到详情页就能看到。' +
+          (myAppeal.voucher ? '<span class="lk">线下交接编号：' + esc(myAppeal.voucher) + '</span>' : '') +
+          '</span></div>';
+      } else {
+        appealBlock = '<div class="lockbox mt-16"><span class="ic">❌</span>' +
+          '<span>发布者<b>驳回了</b>这次申诉' +
+          (myAppeal.note ? '，给出的说明是：' + esc(myAppeal.note) : '') + '。' +
+          '<span class="lk">如果你认为判断有误，可以和发布者当面沟通，或向学校保卫处等渠道求助。</span></span></div>';
+      }
+    } else {
+      appealBlock = '<div class="lockbox mt-16"><span class="ic">↺</span>' +
+        '<span>你还可以再答 <b>' + left + ' 次</b>（一共 ' + (data.maxAttempts || LF.VERIFY.maxAttempts) +
+        ' 次）。3 次机会全部用完仍然没有通过时，可以提交申诉，由发布者人工判断。' +
+        '<span class="lk">提示：先回想清楚这件物品的细节再作答，避免把机会浪费掉。</span></span></div>';
+    }
 
     contentEl.innerHTML =
       '<div class="result-head is-bad">' +
         '<div class="tick">!</div>' +
         '<h2>验证未通过</h2>' +
-        '<p>你提交的答案与发布者设置的隐藏特征不一致。为保护物主隐私，联系方式暂不显示。</p>' +
+        '<p class="fail-reason">回答的细节与描述不符</p>' +
       '</div>' +
 
-      (answerRows
-        ? '<div class="answer-list panel mt-24" style="padding:6px 16px">' + answerRows + '</div>'
-        : '') +
+      '<p class="text-small text-muted mt-12 text-center">' +
+        '为了保证公平，系统不会告诉你是哪一题答错了——否则反复试几次就能把答案试出来。' +
+        '为保护物主隐私，联系方式暂不显示。</p>' +
 
-      (locked
-        ? '<div class="lockbox mt-16"><span class="ic">↺</span>' +
-            '<span>尝试次数已经用完。你可以点击「申请人工核对」，' +
-            '把自己知道的物品细节告诉发布者，由他来判断是否归还。' +
-            '<span class="lk">如果这件物品确实不是你的，请不要再尝试，把机会留给真正的失主。</span></span></div>'
-        : '<div class="lockbox mt-16"><span class="ic">↺</span>' +
-            '<span>你还可以再尝试 <b>' + left + ' 次</b>。' +
-            '把机会用完之后，可以申请人工核对，由发布者直接判断。' +
-            '<span class="lk">提示：先回想一下物品的细节再作答，避免反复尝试。</span></span></div>') +
+      appealBlock +
 
       '<div class="safe-tip is-warn mt-12"><span>⚠️</span>' +
         '<span>若这件物品并不属于你，请勿反复尝试，把认领机会留给失主。</span></div>' +
 
-      '<p class="text-small text-muted mt-12">也有可能是发布者填写的答案和你记忆中的说法不一样，' +
-        '比如"深蓝色"和"藏青"。这种情况下人工核对往往更快。</p>' +
+      '<p class="text-small text-muted mt-12">也有可能是你和发布者对物品的理解不一样，' +
+        '比如"深蓝色"和"藏青"。这种情况走人工审核往往更快。</p>' +
 
       '<div class="action-bar mt-24" style="position:static;padding:0;border:none;background:none">' +
         '<a class="btn btn-ghost" href="detail.html?id=' + encodeURIComponent(postId) + '">返回详情</a>' +
         (locked
-          ? '<a class="btn btn-ghost" href="search.html?q=' + encodeURIComponent(post.title) + '">搜索同类信息</a>'
-          : '<a class="btn btn-ghost" href="verify.html?id=' + encodeURIComponent(postId) + '">重新回答</a>') +
-        '<button type="button" class="btn btn-primary" id="manualBtn">申请人工核对</button>' +
+          ? (myAppeal && myAppeal.decision === 'pending'
+              ? '<a class="btn btn-primary" href="appeal.html?id=' + encodeURIComponent(postId) + '">查看我的申诉</a>'
+              : '<a class="btn btn-primary" href="appeal.html?id=' + encodeURIComponent(postId) + '">提交申诉</a>')
+          : '<a class="btn btn-ghost" href="search.html?q=' + encodeURIComponent(post.title) + '">搜索同类信息</a>' +
+            '<a class="btn btn-primary" href="verify.html?id=' + encodeURIComponent(postId) + '">重新作答</a>') +
       '</div>';
-
-    ui.qs('#manualBtn').addEventListener('click', showManualCheck);
-  }
-
-  /** 人工核对：把"该告诉发布者什么"讲清楚，并给一条复制好的说明。 */
-  function showManualCheck() {
-    var template = '你好，我认领「' + post.title + '」时没通过验证。' +
-      '我想补充一些我能说清的细节：\n' +
-      '1. \n2. \n' +
-      '如果方便的话，能否请你判断一下？谢谢。';
-
-    ui.modal({
-      title: '申请人工核对',
-      bodyHtml:
-        '<p style="margin-bottom:10px">认领验证只能比对预先设置好的那几项特征，' +
-        '有时候你记得的细节和发布者写的不完全一样，机器判不出来。这种时候人工核对更靠谱。</p>' +
-        '<p style="margin-bottom:10px"><b>你可以这样联系发布者：</b>先把下面这段说明复制下来，' +
-        '补上你记得的物品细节，再通过班级群、同学转达等方式发给发布者。</p>' +
-        '<textarea class="textarea" readonly style="height:112px;font-size:12.5px">' +
-        esc(template) + '</textarea>',
-      buttons: [
-        {
-          text: '复制这段说明',
-          onClick: function (close) {
-            ui.copyWithToast(template, '已复制，补上细节后发给发布者即可');
-            close();
-          }
-        },
-        { text: '知道了', primary: true }
-      ]
-    });
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

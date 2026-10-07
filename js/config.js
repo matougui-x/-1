@@ -1,6 +1,6 @@
 /*!
  * 校园失物招领 —— 全局配置
- * 所有"业务字典"集中在这里：信息类型、物品分类、地点区域、状态、隐藏特征预设问题。
+ * 所有"业务字典"集中在这里：信息类型、物品分类、地点区域、状态、认领验证题型的出题模板。
  * 页面与数据层都不写死中文字面量，一律从这里取，便于统一维护。
  */
 (function (root) {
@@ -8,15 +8,16 @@
 
   var LF = (root.LF = root.LF || {});
 
-  /** 数据版本号，改变数据结构时递增，用于旧数据迁移。 */
-  LF.DATA_VERSION = 1;
+  /** 数据版本号，改变数据结构时递增，用于旧数据迁移（见 store.js 的 migratePost）。 */
+  LF.DATA_VERSION = 2;
 
   /** 本地存储键名。加前缀避免与同源下其它页面冲突。 */
   LF.KEYS = {
-    posts: 'lf.posts.v1',        // 全部失物招领信息
+    posts: 'lf.posts.v1',        // 全部失物招领信息（键名不变，靠 DATA_VERSION 做就地迁移）
     history: 'lf.history.v1',    // 搜索历史
     unlocked: 'lf.unlocked.v1',  // 本机已通过认领验证的信息 id
     lastClaim: 'lf.lastClaim.v1',// 最近一次认领验证的结果（验证页跳结果页时传递）
+    lastAppeal: 'lf.lastAppeal.v1', // 最近一次提交的申诉（申诉页跳结果页时传递）
     me: 'lf.me.v1',              // 本机身份（昵称 + 联系方式，发布时自动带出）
     uid: 'lf.uid.v1'             // 本机唯一标识，用于判断"我的发布"
   };
@@ -73,74 +74,95 @@
   ];
 
   /**
-   * 隐藏特征预设问题：按物品分类给出候选问题，发布者只需填写答案。
-   * 答案不会出现在首页、搜索结果和详情页（详见 store.js 的 toPublic）。
+   * 认领验证的题型。第二版方案只允许客观题：
+   * 判断题由系统固定给出「正确 / 错误」，选择题由发布者写 2–4 个选项。
    */
-  LF.HIDDEN_PRESETS = {
+  LF.QUESTION_TYPES = [
+    { key: 'judge', name: '判断题', hint: '系统固定给出「正确 / 错误」两个选项' },
+    { key: 'choice', name: '选择题', hint: '自己写 2–4 个选项，并指定正确答案' }
+  ];
+
+  /** 判断题的固定选项，顺序即答案下标（0 = 正确，1 = 错误）。 */
+  LF.JUDGE_OPTIONS = ['正确', '错误'];
+
+  /**
+   * 出题模板：按物品分类给两条可直接插入的客观题，发布者改一改就能用。
+   * 只提供题干和候选项，"哪一项才是对的"必须由发布者自己指定。
+   */
+  LF.QUESTION_TEMPLATES = {
     card: [
-      { q: '卡面姓名', ask: '卡面上的姓名是什么？' },
-      { q: '卡号后四位', ask: '卡号后四位是多少？' },
-      { q: '卡面标记', ask: '卡面上有什么贴纸、签名或磨损特征？' }
+      { type: 'judge', stem: '卡面上有贴纸、签名或其他人为做的标记' },
+      { type: 'choice', stem: '卡主所在的年级是', options: ['大一', '大二', '大三', '大四'] }
     ],
     key: [
-      { q: '挂件特征', ask: '钥匙上有什么挂件或装饰？' },
-      { q: '钥匙数量', ask: '这一串一共有几把钥匙？' },
-      { q: '钥匙用途', ask: '是宿舍钥匙、车钥匙还是别的？' }
+      { type: 'judge', stem: '钥匙上挂着挂件或装饰' },
+      { type: 'choice', stem: '这一串钥匙的用途是', options: ['宿舍钥匙', '车钥匙', '柜子钥匙', '其他'] }
     ],
     headphone: [
-      { q: '品牌型号', ask: '耳机的品牌或型号是什么？' },
-      { q: '颜色特征', ask: '耳机是什么颜色？' },
-      { q: '充电盒标记', ask: '充电盒上有什么贴纸或划痕？' }
+      { type: 'judge', stem: '充电盒或耳机上有贴纸、明显划痕' },
+      { type: 'choice', stem: '耳机的品牌是', options: ['苹果', '华为', '小米', '索尼'] }
     ],
     umbrella: [
-      { q: '伞面颜色', ask: '伞面是什么颜色、什么花纹？' },
-      { q: '伞柄特征', ask: '伞柄是什么样式、有什么特征？' },
-      { q: '品牌标记', ask: '伞上有品牌标志吗？是什么？' }
+      { type: 'judge', stem: '伞面是纯色、没有花纹' },
+      { type: 'choice', stem: '伞柄的样子是', options: ['直柄', '弯柄', '自动伸缩', '折叠短柄'] }
     ],
     book: [
-      { q: '书名', ask: '这本书的书名是什么？' },
-      { q: '扉页签名', ask: '扉页或封面内页写了什么？' },
-      { q: '笔记特征', ask: '书里有什么样的笔记或标记？' }
+      { type: 'judge', stem: '书的扉页或内页写有名字' },
+      { type: 'choice', stem: '书里的笔记主要用什么颜色标注', options: ['黑色', '红色', '蓝色', '荧光黄'] }
     ],
     cup: [
-      { q: '杯身颜色', ask: '杯子是什么颜色？' },
-      { q: '容量与品牌', ask: '容量多大？是什么品牌？' },
-      { q: '杯身图案', ask: '杯身上有什么图案或贴纸？' }
+      { type: 'judge', stem: '杯身贴着贴纸或印有图案' },
+      { type: 'choice', stem: '杯子的主要颜色是', options: ['白色', '黑色', '蓝色', '粉色'] }
     ],
     electronics: [
-      { q: '品牌型号', ask: '设备是什么品牌和型号？' },
-      { q: '锁屏或壁纸', ask: '锁屏壁纸或桌面是什么样子？' },
-      { q: '外观特征', ask: '机身有什么划痕、贴纸或保护壳？' }
+      { type: 'judge', stem: '设备上有明显的划痕或磕碰' },
+      { type: 'choice', stem: '设备外面的保护壳是', options: ['透明壳', '黑色壳', '彩色壳', '没有保护壳'] }
     ],
     bag: [
-      { q: '颜色与款式', ask: '包是什么颜色、什么款式？' },
-      { q: '包内物品', ask: '包里有什么标志性的物品？' },
-      { q: '挂饰特征', ask: '包上有什么挂饰或徽章？' }
+      { type: 'judge', stem: '包上挂着挂饰或徽章' },
+      { type: 'choice', stem: '包里最显眼的物品是', options: ['笔记本电脑', '课本', '水杯', '雨伞'] }
     ],
     clothing: [
-      { q: '颜色与尺码', ask: '衣物是什么颜色、多大尺码？' },
-      { q: '品牌标记', ask: '有什么品牌标志或洗标信息？' },
-      { q: '特殊记号', ask: '有什么污渍、破损或自己做的记号？' }
+      { type: 'judge', stem: '衣物上有污渍、破损或自己做的记号' },
+      { type: 'choice', stem: '衣物的尺码是', options: ['S', 'M', 'L', 'XL'] }
     ],
     glasses: [
-      { q: '镜框颜色', ask: '镜框是什么颜色、什么材质？' },
-      { q: '镜片特征', ask: '镜片有什么特殊处理或厚度特征？' },
-      { q: '镜盒特征', ask: '镜盒或镜布是什么样式？' }
+      { type: 'judge', stem: '镜片有明显的厚度或特殊镀膜' },
+      { type: 'choice', stem: '镜框的材质看起来是', options: ['塑料', '金属', '半框', '无框'] }
     ],
     other: [
-      { q: '外观特征', ask: '物品有什么一眼能认出的外观特征？' },
-      { q: '内部标记', ask: '物品内部或底部有什么标记？' },
-      { q: '来源线索', ask: '在哪里购买或获得的？' }
+      { type: 'judge', stem: '物品上有一眼能认出的个人标记' },
+      { type: 'choice', stem: '物品是在什么地方被捡到的', options: ['教室或自习室', '食堂', '路上', '运动场'] }
     ]
   };
 
-  /** 认领验证规则。 */
+  /**
+   * 认领验证规则（第二版：纯客观题 + 限制次数）。
+   *
+   * 第一版是"系统按分类预设问题、发布者只填答案、认领时随机抽 2 题手打答案"，
+   * 有两个绕不开的毛病：答案措辞稍有出入（"深蓝色"和"藏青"）就误判，
+   * 而且答错时系统要指出是哪题错，等于把剩余题目的答案范围缩小了。
+   * 第二版改成发布者自己出客观题、一次答完、统一判定。
+   */
   LF.VERIFY = {
-    askCount: 3,        // 一次最多抽几题（不足则按实际数量抽）
-    pickCount: 2,       // 实际抽取作答的题数
-    maxAttempts: 3,     // 最多尝试次数，用完转人工核对
-    minHidden: 2,       // 招领信息至少设置几项隐藏特征
-    maxHidden: 3
+    minQuestions: 3,        // 至少出几题
+    maxQuestions: 5,        // 最多出几题
+    suggestedQuestions: 4,  // 建议题量（界面上按这个提示）
+    maxAttempts: 3,         // 认领者最多答几次，用完才解锁【申诉】
+    minOptions: 2,          // 选择题最少几个选项
+    maxOptions: 4,          // 选择题最多几个选项
+    stemMin: 4,             // 题干最短字数
+    stemMax: 60,            // 题干最长字数
+    optionMax: 16           // 单个选项最长字数
+  };
+
+  /** 申诉（3 次全败后的人工审核通道）。 */
+  LF.APPEAL = {
+    nameMax: 20,
+    contactMin: 3,
+    contactMax: 60,
+    detailMin: 10,
+    detailMax: 300
   };
 
   /** 首页"大家都在搜"，按实际数据可调整。 */
@@ -174,17 +196,24 @@
     return list.map(function (item) { return item.key; });
   };
 
-  /** 某个分类可用的隐藏特征预设问题。 */
-  LF.presetsFor = function (categoryKey) {
-    return LF.HIDDEN_PRESETS[categoryKey] || LF.HIDDEN_PRESETS.other;
+  /** 某个分类可用的出题模板。 */
+  LF.templatesFor = function (categoryKey) {
+    return LF.QUESTION_TEMPLATES[categoryKey] || LF.QUESTION_TEMPLATES.other;
   };
 
-  /** 按问题名反查提问句（详情页和答题页都用它把"卡面姓名"变成一句问话）。 */
-  LF.askOf = function (categoryKey, questionName) {
-    var presets = LF.presetsFor(categoryKey);
-    for (var i = 0; i < presets.length; i++) {
-      if (presets[i].q === questionName) return presets[i].ask;
-    }
-    return '请回答：' + questionName + '？';
+  /** 题型字典查询。 */
+  LF.questionTypeOf = function (key) {
+    return LF.findBy(LF.QUESTION_TYPES, key) || LF.QUESTION_TYPES[0];
+  };
+
+  /** 判断题与选择题各几道，界面上用来说明"这套题长什么样"。 */
+  LF.questionMix = function (questions) {
+    var list = Array.isArray(questions) ? questions : [];
+    var mix = { judge: 0, choice: 0, total: list.length };
+    list.forEach(function (item) {
+      if (item && item.type === 'judge') mix.judge++;
+      else if (item && item.type === 'choice') mix.choice++;
+    });
+    return mix;
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

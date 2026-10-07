@@ -3,8 +3,8 @@
  *
  * 这里解决两个问题：
  *   1. 断言库：浏览器里把 chai 挂成全局 assert；将来用 Node 跑时由 node-setup.js 挂。
- *   2. 确定性：把"当前时间"和"随机数"都固定下来。否则涉及过期、抽题、排序的
- *      测试会随运行时刻时好时坏，那种测试比没有还糟。
+ *   2. 确定性：把"当前时间"固定下来。否则涉及过期、排序的测试会随运行
+ *      时刻时好时坏，那种测试比没有还糟。
  */
 (function (root) {
   'use strict';
@@ -22,9 +22,31 @@
   /** 所有测试共用的"现在"。写死之后，时间相关的断言才有确定结果。 */
   var FIXED_NOW = new Date('2026-10-02T10:00:00');
 
-  /** 固定随机源：永远返回 0，于是 pickRandom 每次抽到的都是前 N 个。 */
-  function fixedRandom() {
-    return 0;
+  /**
+   * 一套标准验证题：判断题 2 道 + 选择题 2 道，正确答案一律是第 1 个选项。
+   * 判断题的选项由数据层固定成「正确 / 错误」，所以这里不用写 options。
+   */
+  function questions() {
+    return [
+      { id: 'q1', type: 'judge', stem: '卡面上写的是王小明这个名字', answer: 0 },
+      { id: 'q2', type: 'judge', stem: '卡面贴着一张蓝色小熊贴纸', answer: 0 },
+      { id: 'q3', type: 'choice', stem: '卡号后四位是', options: ['3882', '1027', '5566'], answer: 0 },
+      { id: 'q4', type: 'choice', stem: '这张卡属于哪个年级', options: ['2023 级', '2022 级'], answer: 0 }
+    ];
+  }
+
+  /**
+   * 一份作答。不传参数表示全部答对；传 ['q3'] 表示第 3 题故意答错。
+   * @param {Array<string>} [wrongIds]
+   */
+  function answers(wrongIds) {
+    var wrong = wrongIds || [];
+    return questions().map(function (question) {
+      return {
+        id: question.id,
+        choice: wrong.indexOf(question.id) === -1 ? 0 : 1
+      };
+    });
   }
 
   /**
@@ -34,12 +56,8 @@
    */
   function makeStore(options) {
     var opts = options || {};
-    var storeOptions = { now: opts.now || FIXED_NOW };
-    if (opts.random) storeOptions.random = opts.random;
-    else storeOptions.random = fixedRandom;
-
     var adapter = opts.adapter || LF.createMemoryAdapter();
-    var store = LF.createStore(adapter, storeOptions);
+    var store = LF.createStore(adapter, { now: opts.now || FIXED_NOW });
     store.init(opts.seed || []);
     return store;
   }
@@ -58,15 +76,12 @@
       contactName: '张明远',
       contactDept: '信息与计算科学 2023 级',
       contactWay: '微信：zhangmy2023',
-      hidden: [
-        { q: '卡面姓名', a: '王小明' },
-        { q: '卡号后四位', a: '3882' }
-      ]
+      questions: questions()
     };
     return merge(base, overrides);
   }
 
-  /** 一份合法的寻物信息：寻物不需要设置隐藏特征。 */
+  /** 一份合法的寻物信息：寻物不需要出验证题。 */
   function validLost(overrides) {
     var base = {
       type: 'lost',
@@ -80,7 +95,7 @@
       contactName: '李思远',
       contactDept: '计算机科学与技术 2022 级',
       contactWay: '手机：13800000000',
-      hidden: []
+      questions: []
     };
     return merge(base, overrides);
   }
@@ -116,7 +131,7 @@
     return result.post;
   }
 
-  /** 取内部原始记录（含答案），只有测试需要，页面代码不该用它。 */
+  /** 取内部原始记录（含正确答案），只有测试需要，页面代码不该用它。 */
   function rawPost(store, id) {
     var exported = store.exportAll();
     for (var i = 0; i < exported.posts.length; i++) {
@@ -135,7 +150,8 @@
 
   root.T = {
     FIXED_NOW: FIXED_NOW,
-    fixedRandom: fixedRandom,
+    questions: questions,
+    answers: answers,
     makeStore: makeStore,
     validFound: validFound,
     validLost: validLost,

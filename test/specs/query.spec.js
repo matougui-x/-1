@@ -21,8 +21,7 @@ describe('浏览、搜索与筛选', function () {
       category: 'card',
       area: 'teaching',
       location: '教学楼 A 栋 301 教室',
-      description: '在最后一排捡到的，卡面有贴纸。',
-      hidden: [{ q: '卡面姓名', a: '王小明' }, { q: '卡号后四位', a: '3882' }]
+      description: '在最后一排捡到的，卡面有贴纸。'
     }), me);
 
     store.create(T.validLost({
@@ -38,8 +37,7 @@ describe('浏览、搜索与筛选', function () {
       category: 'umbrella',
       area: 'canteen',
       location: '第二食堂门口',
-      description: '伞套还在。',
-      hidden: [{ q: '伞面颜色', a: '浅粉色' }, { q: '伞柄特征', a: '直柄' }]
+      description: '伞套还在。'
     }), 'other_2');
 
     store.create(T.validLost({

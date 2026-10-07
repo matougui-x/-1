@@ -49,15 +49,16 @@
   var protectedTip = post.needVerify
     ? '<div class="lockbox mt-16">' +
         '<span class="ic">🔒</span>' +
-        '<span>已隐藏 <b>' + post.hiddenCount + ' 项特征</b>：' +
-        esc(post.hiddenLabels.join('、')) +
-        '<span class="lk">这些内容不会出现在首页、搜索结果和信息详情页；' +
-        '认领人答对后才能看到你的联系方式。</span></span>' +
+        '<span>已设置 <b>' + post.questionCount + ' 道认领验证题</b>' +
+        '（判断题 ' + post.questionMix.judge + ' 道 · 选择题 ' + post.questionMix.choice + ' 道）。' +
+        '<span class="lk">题目和选项会在认领时展示给对方，但你指定的正确答案不会出现在任何页面里；' +
+        '对方一次性答完全部题目、全部答对之后才能看到你的联系方式并生成认领凭证。' +
+        '他最多能答 ' + LF.VERIFY.maxAttempts + ' 次，3 次都没答对可以提交申诉，由你人工判断。</span></span>' +
       '</div>'
     : '';
 
   var nextStep = post.type === 'found'
-    ? '有人联系你时，请先让对方说出隐藏特征核对身份，再约定地点交接；物归原主后记得回来把状态标记为「已归还」。'
+    ? '有人认领时，先看他有没有答对全部验证题，再约定地点交接；物归原主后记得回来把状态标记为「已归还」。'
     : '有人联系你说捡到了，同样建议先核对物品特征；东西找回来之后记得把状态标记为「已找到」，别人就不会再重复联系你了。';
 
   contentEl.innerHTML =

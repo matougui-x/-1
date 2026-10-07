@@ -130,7 +130,7 @@ describe('存储适配器与容错', function () {
         photos: [], contactName: '张三', contactDept: '', contactWay: '微信：abc',
         status: 'open', doneType: null, doneAt: null,
         createdAt: 1759300000000, updatedAt: 1759300000000, views: 0,
-        ownerId: 'u1', hidden: [], claims: [], attemptsLeft: 3
+        ownerId: 'u1', questions: [], claims: [], appeals: [], attemptsLeft: 3
       };
       adapter.setItem(LF.KEYS.posts, JSON.stringify([good, null, '字符串', { 没有id: true }, 42]));
 

@@ -1,14 +1,13 @@
 /*!
- * 单元测试 —— 认领验证（防止冒领）
+ * 单元测试 —— 认领验证（纯客观题 + 限制次数，第二版方案）
  *
- * 这是本项目最有价值也最容易写错的一块：既要拦住冒领的人，
- * 又不能让真正的失主被误伤。所以除了"答对通过、答错不通过"这两条主线，
- * 还要重点测：
- *   - 抽题是否真的随机且不重复（否则每次都问同一题，试探成本变低）；
- *   - 答案归一化是否够宽容（"王小明"和"王 小明。"必须算同一个答案）；
- *   - 尝试次数是否会被绕过（自己拼一组题提交、重复提交同一题）。
+ * 这一版要重点守住四条规则：
+ *   1. 发布者出题，题型只有判断题和选择题，题数 3–5 题；
+ *   2. 认领者一次性答完全部题目，系统统一判定；
+ *   3. 未通过时不告诉认领者"哪一题错了"，否则 3 次机会足够用排除法试出答案；
+ *   4. 最多答 3 次，3 次全败才解锁【申诉】走人工审核。
  */
-describe('认领验证', function () {
+describe('认领验证（客观题 + 限制次数）', function () {
   var root = typeof globalThis !== 'undefined' ? globalThis : this;
   var LF = root.LF;
   var T = root.T;
@@ -16,77 +15,48 @@ describe('认领验证', function () {
   var OWNER = 'owner_1';
   var CLAIMER = 'claimer_1';
 
-  /** 一条有三项隐藏特征的招领信息。 */
+  /** 一条有 4 道验证题的招领信息。 */
   function makeVerifyStore() {
     var store = T.makeStore();
-    var post = T.publishFound(store, OWNER, {
-      hidden: [
-        { q: '卡面姓名', a: '王小明' },
-        { q: '卡号后四位', a: '3882' },
-        { q: '卡面标记', a: '蓝色小熊贴纸' }
-      ]
-    });
+    var post = T.publishFound(store, OWNER, { questions: T.questions() });
     return { store: store, post: post };
   }
 
-  describe('抽题 startClaim', function () {
-    it('返回两道题，且题目来自发布者设置的隐藏特征', function () {
+  describe('取题 startClaim', function () {
+    it('一次返回全部题目，不再随机抽题', function () {
       var ctx = makeVerifyStore();
       var start = ctx.store.startClaim(ctx.post.id);
 
       assert.isTrue(start.ok, start.message);
-      assert.lengthOf(start.questions, LF.VERIFY.pickCount);
-      start.questions.forEach(function (item) {
-        assert.include(['卡面姓名', '卡号后四位', '卡面标记'], item.q);
-      });
+      assert.lengthOf(start.questions, 4);
+      assert.deepEqual(start.questions.map(function (q) { return q.id; }), ['q1', 'q2', 'q3', 'q4']);
     });
 
-    it('返回的题目里不含答案', function () {
+    it('题目里带上了题干与选项，且不含 answer', function () {
       var ctx = makeVerifyStore();
       var start = ctx.store.startClaim(ctx.post.id);
       var serialized = JSON.stringify(start);
-      assert.notInclude(serialized, '王小明');
-      assert.notInclude(serialized, '3882');
-      assert.notInclude(serialized, '蓝色小熊贴纸');
+
+      assert.strictEqual(start.questions[0].stem, '卡面上写的是王小明这个名字');
+      assert.deepEqual(start.questions[0].options, ['正确', '错误']);
+      assert.strictEqual(start.questions[2].options[0], '3882');
+      assert.notInclude(serialized, '"answer"', '正确答案绝不能随题目下发');
     });
 
-    it('题目带上了完整的问句，可以直接显示', function () {
+    it('题目里带上题型名，界面可以直接显示', function () {
       var ctx = makeVerifyStore();
       var start = ctx.store.startClaim(ctx.post.id);
-      assert.match(start.questions[0].ask, /？$/);
+      assert.strictEqual(start.questions[0].typeName, '判断题');
+      assert.strictEqual(start.questions[2].typeName, '选择题');
+      assert.strictEqual(start.questionMix.judge, 2);
+      assert.strictEqual(start.questionMix.choice, 2);
     });
 
-    it('每次抽到的题目不重复', function () {
+    it('返回剩余次数，界面用它显示 3 / 3', function () {
       var ctx = makeVerifyStore();
       var start = ctx.store.startClaim(ctx.post.id);
-      var names = start.questions.map(function (item) { return item.q; });
-      assert.lengthOf(LF.utils.unique(names), names.length);
-    });
-
-    it('隐藏特征只有两项时，两道题就是把两项都问一遍', function () {
-      var store = T.makeStore();
-      var post = T.publishFound(store, OWNER);   // 默认两项隐藏特征
-      var start = store.startClaim(post.id);
-      assert.lengthOf(start.questions, 2);
-      // 用集合比较，避开中文按 UTF-16 码点排序带来的顺序干扰
-      assert.sameMembers(
-        start.questions.map(function (i) { return i.q; }),
-        ['卡面姓名', '卡号后四位']
-      );
-    });
-
-    it('随机源不同时抽到的题目也不同（证明抽题确实随机）', function () {
-      var store = T.makeStore({ random: function () { return 0.99; } });
-      var post = T.publishFound(store, OWNER, {
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '3882' },
-          { q: '卡面标记', a: '蓝色小熊贴纸' }
-        ]
-      });
-      var start = store.startClaim(post.id);
-      assert.lengthOf(start.questions, 2);
-      assert.include(start.questions.map(function (i) { return i.q; }), '卡面标记');
+      assert.strictEqual(start.remaining, LF.VERIFY.maxAttempts);
+      assert.strictEqual(start.maxAttempts, LF.VERIFY.maxAttempts);
     });
 
     it('不需要验证的寻物信息不能发起认领', function () {
@@ -113,183 +83,152 @@ describe('认领验证', function () {
     });
   });
 
-  describe('提交答案 submitClaim', function () {
-    it('两题全对时通过，返回凭证码与发布者联系方式', function () {
+  describe('提交答案 submitClaim：统一判定', function () {
+    it('全部答对时通过，返回凭证码与发布者联系方式', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-
-      var result = ctx.store.submitClaim(ctx.post.id, {
-        '卡面姓名': '王小明',
-        '卡号后四位': '3882'
-      });
+      var result = ctx.store.submitClaim(ctx.post.id, T.answers());
 
       assert.isTrue(result.ok, result.message);
       assert.isTrue(result.passed);
-      assert.match(result.voucher, /^CL-2026-\d{4}$/);
+      assert.match(result.voucher, /^CL-\d{4}-\d{4}$/);
       assert.strictEqual(result.contact.way, '微信：zhangmy2023');
       assert.strictEqual(result.contact.name, '张明远');
-      assert.deepEqual(result.verifiedLabels, ['卡面姓名', '卡号后四位']);
+      assert.strictEqual(result.questionCount, 4);
+      assert.strictEqual(result.correctCount, 4);
     });
 
-    it('凭证码符合 CL-四位年份-四位编号 的格式', function () {
+    it('答错一题就不通过，而且不告诉你是哪一题错', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      assert.match(result.voucher, /^CL-\d{4}-\d{4}$/);
-    });
-
-    it('答错一题就不通过，并告诉你是哪一题错了', function () {
-      var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-
-      var result = ctx.store.submitClaim(ctx.post.id, {
-        '卡面姓名': '王小明',
-        '卡号后四位': '0000'
-      });
+      var result = ctx.store.submitClaim(ctx.post.id, T.answers(['q3']));
 
       assert.isTrue(result.ok);
       assert.isFalse(result.passed);
-      assert.lengthOf(result.failed, 1);
-      assert.strictEqual(result.failed[0].q, '卡号后四位');
+      assert.strictEqual(result.message, '回答的细节与描述不符');
+      assert.notProperty(result, 'failed', '结果里不能带"哪题错了"的信息');
       assert.notProperty(result, 'voucher');
+      // 返回的整个对象里都不该出现题号或选项，否则前端能反推出错在哪题
+      var serialized = JSON.stringify(result);
+      assert.notInclude(serialized, 'q1');
+      assert.notInclude(serialized, 'q3');
+      assert.notInclude(serialized, '3882');
     });
 
-    it('答错后剩余尝试次数减一', function () {
+    it('全错与只错一题的返回结构完全一样（不给排除法留线索）', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '错的', '卡号后四位': '错的' });
+      var first = ctx.store.submitClaim(ctx.post.id, T.answers(['q3']));           // 还剩 2 次
+      var second = ctx.store.submitClaim(ctx.post.id, T.answers(['q1', 'q2', 'q3', 'q4']));
+
+      assert.deepEqual(Object.keys(first).sort(), Object.keys(second).sort());
+      assert.strictEqual(first.message, second.message);
+      assert.strictEqual(first.passed, second.passed);
+      assert.strictEqual(second.remaining, first.remaining - 1);
+    });
+
+    it('漏答会被拦下，并且不消耗次数', function () {
+      var ctx = makeVerifyStore();
+      var result = ctx.store.submitClaim(ctx.post.id, [{ id: 'q1', choice: 0 }]);
+
+      assert.isFalse(result.ok);
+      assert.match(result.message, /没有作答/);
+      assert.strictEqual(ctx.store.get(ctx.post.id, OWNER).attemptsLeft, LF.VERIFY.maxAttempts);
+    });
+
+    it('选项下标越界视为没有作答', function () {
+      var ctx = makeVerifyStore();
+      var result = ctx.store.submitClaim(ctx.post.id, [
+        { id: 'q1', choice: 0 }, { id: 'q2', choice: 0 },
+        { id: 'q3', choice: 9 }, { id: 'q4', choice: 0 }
+      ]);
+      assert.isFalse(result.ok);
+      assert.match(result.message, /没有作答/);
+    });
+
+    it('答错后剩余次数减一', function () {
+      var ctx = makeVerifyStore();
+      var result = ctx.store.submitClaim(ctx.post.id, T.answers(['q2']));
+
       assert.strictEqual(result.remaining, LF.VERIFY.maxAttempts - 1);
       assert.strictEqual(result.maxAttempts, LF.VERIFY.maxAttempts);
+      assert.isFalse(result.locked);
+      assert.isFalse(result.canAppeal);
     });
 
-    it('答案为空串算答错', function () {
+    it('答对不消耗次数', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '', '卡号后四位': '' });
-      assert.isFalse(result.passed);
-      assert.lengthOf(result.failed, 2);
+      var result = ctx.store.submitClaim(ctx.post.id, T.answers());
+      assert.strictEqual(result.remaining, LF.VERIFY.maxAttempts);
     });
 
-    it('没有先抽题就提交会被拒绝（防止自己拼题目试探答案）', function () {
-      var ctx = makeVerifyStore();
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      assert.isFalse(result.ok);
-      assert.match(result.message, /重新进入/);
-    });
-
-    it('提交过一次之后本次抽题作废，想再答必须重新抽题', function () {
-      var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '错的', '卡号后四位': '错的' });
-
-      // 上一次的 pendingClaim 已经清掉，直接再提交应当被要求重新抽题
-      var again = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      assert.isFalse(again.ok);
-      assert.match(again.message, /重新进入/);
-    });
-
-    it('把没被问到的题也一起提交，不会因此获得通过', function () {
-      var store = T.makeStore({ random: function () { return 0; } });
-      var post = T.publishFound(store, OWNER, {
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '3882' },
-          { q: '卡面标记', a: '蓝色小熊贴纸' }
-        ]
-      });
-      store.startClaim(post.id);   // 固定随机源下只会问到前两项
-
-      var result = store.submitClaim(post.id, {
-        '卡面姓名': '错的',
-        '卡号后四位': '3882',
-        '卡面标记': '蓝色小熊贴纸'   // 没被问到的题，答对也没用
-      });
-
-      assert.isFalse(result.passed, '只有被抽中的题目才应参与判定');
-      assert.lengthOf(result.failed, 1);
-      assert.strictEqual(result.failed[0].q, '卡面姓名');
-    });
-  });
-
-  describe('答案归一化：对失主要宽容', function () {
-    function submitWith(answer) {
-      var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      return ctx.store.submitClaim(ctx.post.id, { '卡面姓名': answer, '卡号后四位': '3882' });
-    }
-
-    it('答案前后的空格不影响判定', function () {
-      assert.isTrue(submitWith('  王小明  ').passed);
-    });
-
-    it('答案中间夹了空格也算对', function () {
-      assert.isTrue(submitWith('王 小明').passed);
-    });
-
-    it('全角字母数字与半角等价', function () {
-      var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '３８８２' });
-      assert.isTrue(result.passed, '全角数字应当被判为正确');
-    });
-
-    it('结尾多打了句号也算对', function () {
-      assert.isTrue(submitWith('王小明。').passed);
-    });
-
-    it('英文答案忽略大小写', function () {
+    it('寻物信息不能提交验证答案', function () {
       var store = T.makeStore();
-      var post = T.publishFound(store, OWNER, {
-        hidden: [
-          { q: '品牌型号', a: 'AirPods Pro' },
-          { q: '颜色特征', a: '白色' }
-        ]
-      });
-      store.startClaim(post.id);
-      var result = store.submitClaim(post.id, { '品牌型号': 'airpods pro', '颜色特征': '白色' });
-      assert.isTrue(result.passed);
-    });
-
-    it('答案确实不同时不放水', function () {
-      assert.isFalse(submitWith('王小明同学').passed, '包含关系不等于相等');
-      assert.isFalse(submitWith('小明王').passed, '顺序不同不算对');
-      assert.isFalse(submitWith('李小明').passed);
+      var post = T.publishLost(store, OWNER);
+      var result = store.submitClaim(post.id, T.answers());
+      assert.isFalse(result.ok);
+      assert.match(result.message, /不需要验证/);
     });
   });
 
-  describe('尝试次数与锁定', function () {
-    function failOnce(store, id) {
-      store.startClaim(id);
-      return store.submitClaim(id, { '卡面姓名': '错的', '卡号后四位': '错的' });
+  describe('限制次数与申诉解锁', function () {
+    function failOnce(store, id, wrongIds) {
+      return store.submitClaim(id, T.answers(wrongIds || ['q1']));
     }
 
-    it('连续答错 3 次后进入锁定状态', function () {
+    it('连续答错 3 次后锁定，并且解锁申诉', function () {
       var ctx = makeVerifyStore();
-      var r1 = failOnce(ctx.store, ctx.post.id);
-      assert.isFalse(r1.locked, '第 1 次失败还不应锁定');
-      var r2 = failOnce(ctx.store, ctx.post.id);
-      assert.isFalse(r2.locked, '第 2 次失败还不应锁定');
-      var r3 = failOnce(ctx.store, ctx.post.id);
-      assert.isTrue(r3.locked, '第 3 次失败后应当锁定');
-      assert.strictEqual(r3.remaining, 0);
+      var first = failOnce(ctx.store, ctx.post.id);
+      assert.isFalse(first.locked, '第 1 次失败还不应锁定');
+      assert.isFalse(first.canAppeal);
+
+      var second = failOnce(ctx.store, ctx.post.id, ['q2']);
+      assert.isFalse(second.locked, '第 2 次失败还不应锁定');
+      assert.strictEqual(second.remaining, 1);
+
+      var third = failOnce(ctx.store, ctx.post.id, ['q3']);
+      assert.isTrue(third.locked, '第 3 次失败后应当锁定');
+      assert.isTrue(third.canAppeal, '第 3 次失败后才解锁申诉');
+      assert.strictEqual(third.remaining, 0);
     });
 
-    it('锁定之后即使答案全对也不能再通过', function () {
+    it('锁定之后即使答案全对也不能再提交', function () {
       var ctx = makeVerifyStore();
       failOnce(ctx.store, ctx.post.id);
-      failOnce(ctx.store, ctx.post.id);
-      failOnce(ctx.store, ctx.post.id);
+      failOnce(ctx.store, ctx.post.id, ['q2']);
+      failOnce(ctx.store, ctx.post.id, ['q3']);
 
       var start = ctx.store.startClaim(ctx.post.id);
       assert.isFalse(start.ok);
-      assert.match(start.message, /人工核对/);
+      assert.isTrue(start.locked);
+      assert.isTrue(start.canAppeal);
+
+      var submit = ctx.store.submitClaim(ctx.post.id, T.answers());
+      assert.isFalse(submit.ok);
+      assert.isTrue(submit.locked);
     });
 
-    it('答对不消耗尝试次数', function () {
+    it('公开视图把剩余次数和"能不能申诉"一并给出，详情页据此换按钮', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      assert.strictEqual(result.remaining, LF.VERIFY.maxAttempts);
+      var before = ctx.store.get(ctx.post.id, CLAIMER);
+      assert.strictEqual(before.attemptsLeft, 3);
+      assert.isFalse(before.canAppeal);
+
+      failOnce(ctx.store, ctx.post.id);
+      failOnce(ctx.store, ctx.post.id, ['q2']);
+      failOnce(ctx.store, ctx.post.id, ['q3']);
+
+      var after = ctx.store.get(ctx.post.id, CLAIMER);
+      assert.strictEqual(after.attemptsLeft, 0);
+      assert.isTrue(after.canAppeal);
+    });
+
+    it('答错三次之后，公开发布者那边也看得到三条未通过的记录', function () {
+      var ctx = makeVerifyStore();
+      failOnce(ctx.store, ctx.post.id);
+      failOnce(ctx.store, ctx.post.id, ['q2']);
+      failOnce(ctx.store, ctx.post.id, ['q3']);
+
+      var claims = ctx.store.listClaims(ctx.post.id, OWNER);
+      assert.lengthOf(claims.claims, 3);
+      assert.lengthOf(claims.claims.filter(function (c) { return c.passed; }), 0);
     });
   });
 
@@ -298,8 +237,7 @@ describe('认领验证', function () {
       var ctx = makeVerifyStore();
       assert.isFalse(ctx.store.isUnlocked(ctx.post.id));
 
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
+      ctx.store.submitClaim(ctx.post.id, T.answers());
 
       assert.isTrue(ctx.store.isUnlocked(ctx.post.id));
       var view = ctx.store.get(ctx.post.id, CLAIMER);
@@ -309,8 +247,7 @@ describe('认领验证', function () {
 
     it('解锁记录里同时保存了凭证码，方便线下出示', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      var result = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
+      var result = ctx.store.submitClaim(ctx.post.id, T.answers());
 
       var info = ctx.store.unlockInfo(ctx.post.id);
       assert.isNotNull(info);
@@ -319,42 +256,38 @@ describe('认领验证', function () {
 
     it('答错不会解锁', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '错的', '卡号后四位': '错的' });
+      ctx.store.submitClaim(ctx.post.id, T.answers(['q1']));
       assert.isFalse(ctx.store.isUnlocked(ctx.post.id));
       assert.isTrue(ctx.store.get(ctx.post.id, CLAIMER).locked);
     });
 
-    it('发布者能在"我的发布"里看到收到的认领申请明细', function () {
+    it('发布者能看到每条认领记录的作答与对错', function () {
       var ctx = makeVerifyStore();
-
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '李四', '卡号后四位': '1234' });
+      ctx.store.submitClaim(ctx.post.id, T.answers());
+      ctx.store.submitClaim(ctx.post.id, T.answers(['q3']));
 
       var claims = ctx.store.listClaims(ctx.post.id, OWNER);
       assert.isTrue(claims.ok, claims.message);
       assert.lengthOf(claims.claims, 2);
 
-      var passed = claims.claims.filter(function (c) { return c.passed; });
-      var failed = claims.claims.filter(function (c) { return !c.passed; });
-      assert.lengthOf(passed, 1);
-      assert.lengthOf(failed, 1);
-      assert.strictEqual(passed[0].voucher.slice(0, 3), 'CL-');
-      assert.lengthOf(failed[0].answers, 2);
+      var passed = claims.claims.filter(function (c) { return c.passed; })[0];
+      var failed = claims.claims.filter(function (c) { return !c.passed; })[0];
+      assert.strictEqual(passed.answers.length, 4);
+      assert.strictEqual(passed.voucher.slice(0, 3), 'CL-');
+      assert.strictEqual(failed.answers.filter(function (a) { return a.correct; }).length, 3);
+      assert.strictEqual(failed.answers[2].choiceText, '1027');
     });
 
     it('我的发布里能看到认领次数统计', function () {
       var ctx = makeVerifyStore();
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
-      ctx.store.startClaim(ctx.post.id);
-      ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '错的', '卡号后四位': '错的' });
+      ctx.store.submitClaim(ctx.post.id, T.answers());
+      ctx.store.submitClaim(ctx.post.id, T.answers(['q1']));
 
       var mine = T.byId(ctx.store.listMine(OWNER).open, ctx.post.id);
       assert.strictEqual(mine.claimCount, 2);
       assert.strictEqual(mine.claimPassed, 1);
+      assert.strictEqual(mine.questionCount, 4);
+      assert.strictEqual(mine.questionMix.judge, 2);
     });
 
     it('非发布者看不到认领明细', function () {
@@ -364,23 +297,100 @@ describe('认领验证', function () {
     });
   });
 
-  describe('编辑隐藏特征', function () {
-    it('改成新答案之后，旧答案不再能通过', function () {
+  describe('编辑题目', function () {
+    it('换掉题目之后，旧答案不再能通过，次数也重新给满', function () {
       var ctx = makeVerifyStore();
-      ctx.store.update(ctx.post.id, {
-        hidden: [
-          { q: '卡面姓名', a: '李四' },
-          { q: '卡号后四位', a: '9999' }
+
+      // 先用掉两次机会
+      ctx.store.submitClaim(ctx.post.id, T.answers(['q1']));
+      ctx.store.submitClaim(ctx.post.id, T.answers(['q2']));
+      assert.strictEqual(ctx.store.get(ctx.post.id, OWNER).attemptsLeft, 1);
+
+      var updated = ctx.store.update(ctx.post.id, {
+        questions: [
+          { type: 'judge', stem: '卡面上写的是李四这个名字', answer: 1 },
+          { type: 'choice', stem: '卡号后四位是', options: ['9999', '1111'], answer: 0 },
+          { type: 'judge', stem: '卡面是新版的', answer: 0 }
         ]
       }, OWNER);
+      assert.isTrue(updated.ok, JSON.stringify(updated.errors));
+      assert.strictEqual(ctx.store.get(ctx.post.id, OWNER).attemptsLeft, LF.VERIFY.maxAttempts,
+        '换了题就等于换了一套验证，次数应当重新给满');
 
-      ctx.store.startClaim(ctx.post.id);
-      var wrong = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '王小明', '卡号后四位': '3882' });
+      var view = ctx.store.get(ctx.post.id, CLAIMER);
+      assert.lengthOf(view.questions, 3);
+      assert.strictEqual(view.questions[0].stem, '卡面上写的是李四这个名字');
+
+      var wrong = ctx.store.submitClaim(ctx.post.id, [
+        { id: view.questions[0].id, choice: 0 },
+        { id: view.questions[1].id, choice: 0 },
+        { id: view.questions[2].id, choice: 0 }
+      ]);
       assert.isFalse(wrong.passed, '旧答案应当失效');
+    });
 
-      ctx.store.startClaim(ctx.post.id);
-      var right = ctx.store.submitClaim(ctx.post.id, { '卡面姓名': '李四', '卡号后四位': '9999' });
-      assert.isTrue(right.passed);
+    it('编辑时取回的草稿带正确答案，只有发布者拿得到', function () {
+      var ctx = makeVerifyStore();
+      var draft = ctx.store.getEditable(ctx.post.id, OWNER);
+      assert.isTrue(draft.ok);
+      assert.strictEqual(draft.post.questions[0].answer, 0);
+
+      var other = ctx.store.getEditable(ctx.post.id, CLAIMER);
+      assert.isFalse(other.ok);
+      assert.match(other.message, /只有发布者/);
+    });
+
+    it('把招领改成寻物后，验证题会被清掉', function () {
+      var ctx = makeVerifyStore();
+      var result = ctx.store.update(ctx.post.id, { type: 'lost' }, OWNER);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+      assert.isFalse(result.post.needVerify);
+      assert.strictEqual(result.post.questionCount, 0);
+    });
+  });
+
+  describe('出题规则', function () {
+    it('判断题的选项由数据层固定成「正确 / 错误」，发布者传什么都不算数', function () {
+      var store = T.makeStore();
+      T.publishFound(store, OWNER, {
+        questions: [
+          { type: 'judge', stem: '卡面上写的是王小明这个名字', options: ['是', '否'], answer: 1 },
+          { type: 'judge', stem: '卡面贴着一张蓝色小熊贴纸', answer: 0 },
+          { type: 'choice', stem: '卡号后四位是', options: ['3882', '1027'], answer: 0 }
+        ]
+      });
+      var raw = T.rawPost(store, store.list()[0].id);
+
+      assert.deepEqual(raw.questions[0].options, ['正确', '错误']);
+      assert.strictEqual(raw.questions[0].answer, 1);
+    });
+
+    it('选择题里的空选项行会被丢掉，正确答案下标跟着重排', function () {
+      var store = T.makeStore();
+      T.publishFound(store, OWNER, {
+        questions: [
+          { type: 'judge', stem: '卡面上写的是王小明这个名字', answer: 0 },
+          { type: 'choice', stem: '卡号后四位是', options: ['', '3882', '1027'], answer: 1 },
+          { type: 'choice', stem: '这张卡属于哪个年级', options: ['2023 级', '', '2022 级'], answer: 0 }
+        ]
+      });
+      var raw = T.rawPost(store, store.list()[0].id);
+
+      assert.deepEqual(raw.questions[1].options, ['3882', '1027']);
+      assert.strictEqual(raw.questions[1].answer, 0, '原来的第 2 项去掉空行后应当变成第 1 项');
+      assert.deepEqual(raw.questions[2].options, ['2023 级', '2022 级']);
+    });
+
+    it('题型不认识的那一题会被丢掉，于是题数不够被拦下', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          { type: 'judge', stem: '卡面上写的是王小明这个名字', answer: 0 },
+          { type: 'judge', stem: '卡面贴着一张蓝色小熊贴纸', answer: 0 },
+          { type: 'essay', stem: '请描述你的物品', answer: 0 }
+        ]
+      }), { now: T.FIXED_NOW });
+      assert.isFalse(result.ok);
+      assert.match(result.errors.questions, /至少/);
     });
   });
 });

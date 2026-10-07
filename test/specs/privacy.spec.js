@@ -1,12 +1,12 @@
 /*!
- * 单元测试 —— 隐藏特征不外泄、状态流转、发布者权限
+ * 单元测试 —— 验证题答案不外泄、状态流转、发布者权限
  *
  * 这三块放在一起测，是因为它们共同决定了"这条信息可不可信"：
- *   - 隐藏答案泄露 → 冒领变得毫无成本，整个防冒领设计作废；
+ *   - 正确答案泄露 → 冒领变得毫无成本，整个防冒领设计作废；
  *   - 状态流转出错 → 别人白跑一趟，正是需求里要解决的痛点；
  *   - 权限校验缺失 → 谁都能改别人的信息，数据不可信。
  */
-describe('隐私保护：隐藏特征答案不外泄', function () {
+describe('隐私保护：验证题答案不外泄', function () {
   var root = typeof globalThis !== 'undefined' ? globalThis : this;
   var LF = root.LF;
   var T = root.T;
@@ -15,26 +15,35 @@ describe('隐私保护：隐藏特征答案不外泄', function () {
   var OTHER = 'other_1';
 
   describe('公开视图 toPublic', function () {
-    it('公开视图里根本没有 hidden 字段', function () {
+    it('公开视图里根本没有 hidden / claims / appeals 字段', function () {
       var store = T.makeStore();
       var post = T.publishFound(store, OWNER);
       var view = store.get(post.id, OTHER);
-      assert.notProperty(view, 'hidden', 'answers 绝不能随对象一起返回');
+
+      assert.notProperty(view, 'hidden', '旧版答案字段不该再出现');
       assert.notProperty(view, 'pendingClaim');
+      assert.notProperty(view, 'claims', '认领记录属于发布者，不能随信息公开');
+      assert.notProperty(view, 'appeals', '申诉人的联系方式更不能公开');
       assert.notProperty(view, 'ownerId', '本机 uid 不应交给页面');
     });
 
-    it('只暴露"隐藏了哪些特征"的名称，不暴露答案', function () {
+    it('题目对外只有题干和选项，没有 answer', function () {
       var store = T.makeStore();
       var post = T.publishFound(store, OWNER);
       var view = store.get(post.id, OTHER);
 
-      assert.deepEqual(view.hiddenLabels, ['卡面姓名', '卡号后四位']);
-      assert.strictEqual(view.hiddenCount, 2);
+      assert.strictEqual(view.questionCount, 4);
+      assert.strictEqual(view.questionMix.judge, 2);
+      assert.lengthOf(view.questions, 4);
+      view.questions.forEach(function (question) {
+        assert.notProperty(question, 'answer', '正确答案的下标绝不能下发');
+        assert.isArray(question.options);
+        assert.isString(question.stem);
+      });
 
       var serialized = JSON.stringify(view);
-      assert.notInclude(serialized, '王小明', '答案不得出现在任何对外数据里');
-      assert.notInclude(serialized, '3882', '答案不得出现在任何对外数据里');
+      assert.notInclude(serialized, 'answer');
+      assert.notInclude(serialized, '张明远', '完整姓名不应出现在公开视图');
     });
 
     it('未通过验证的浏览者拿不到联系方式', function () {
@@ -62,29 +71,32 @@ describe('隐私保护：隐藏特征答案不外泄', function () {
       assert.strictEqual(view.contactWay, '手机：13800000000');
     });
 
-    it('列表页返回的每一条都不会带出答案', function () {
+    it('列表页返回的每一条都不会带出正确答案', function () {
       var store = T.makeStore();
       T.publishFound(store, OWNER);
-      T.publishFound(store, OWNER, {
-        title: '另一张校园卡',
-        hidden: [
-          { q: '卡面标记', a: '有小熊贴纸' },
-          { q: '卡号后四位', a: '5566' }
-        ]
-      });
+      T.publishFound(store, OWNER, { title: '另一张校园卡' });
+
       var list = store.list({ viewerId: OTHER });
-      var serialized = JSON.stringify(list);
-      assert.notInclude(serialized, '王小明');
-      assert.notInclude(serialized, '有小熊贴纸');
+      assert.lengthOf(list, 2);
+      list.forEach(function (item) {
+        item.questions.forEach(function (question) {
+          assert.notProperty(question, 'answer');
+        });
+      });
+      assert.notInclude(JSON.stringify(list), '"answer"');
     });
 
-    it('搜索结果同样不会带出答案', function () {
+    it('搜索结果同样不会带出正确答案与作答明细', function () {
       var store = T.makeStore();
-      T.publishFound(store, OWNER);
+      var post = T.publishFound(store, OWNER);
+      store.submitClaim(post.id, T.answers(['q1']));   // 先产生一条认领记录
+
       var list = store.list({ keyword: '校园卡', viewerId: OTHER });
       assert.lengthOf(list, 1);
-      assert.notInclude(JSON.stringify(list), '3882');
-      assert.notInclude(JSON.stringify(list), '王小明');
+      var serialized = JSON.stringify(list);
+      assert.notInclude(serialized, '"answer"', '正确答案下标不能进公开数据');
+      assert.notInclude(serialized, '"correct"', '作答明细不能进公开数据');
+      assert.notInclude(serialized, '"claims"');
     });
 
     it('发布人姓名对非发布者是打码的，对发布者本人是完整的', function () {
@@ -289,12 +301,12 @@ describe('状态维护：已找到 / 已归还', function () {
       assert.strictEqual(store.get(post.id, OWNER).title, '校园卡一张');
     });
 
-    it('把招领改成寻物后，隐藏特征会被清掉', function () {
+    it('把招领改成寻物后，验证题会被清掉', function () {
       var store = T.makeStore();
       var post = T.publishFound(store, OWNER);
       var result = store.update(post.id, { type: 'lost' }, OWNER);
-      assert.isTrue(result.ok);
-      assert.strictEqual(result.post.hiddenCount, 0);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+      assert.strictEqual(result.post.questionCount, 0);
       assert.isFalse(result.post.needVerify);
     });
 
