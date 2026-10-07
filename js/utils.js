@@ -49,17 +49,6 @@
     return h.indexOf(n) !== -1;
   };
 
-  /**
-   * 认领答案归一化：在 normalizeText 基础上再去掉所有空白与常见中英文标点。
-   * 目的是让"王小明"「王 小明」「王小明。」「王小明!」被判为同一个答案。
-   * 刻意保留 - _ / ，因为卡号、型号里它们可能是有效字符。
-   */
-  U.normalizeAnswer = function (str) {
-    return U.normalizeText(str)
-      .replace(/\s+/g, '')
-      .replace(/[。，、．·…～~！？；：""''“”‘’（）()【】\[\]《》<>!?,;:'"`]/g, '');
-  };
-
   /** HTML 转义。所有用户输入渲染进页面前都必须过这一道，防止 XSS 与排版错乱。 */
   U.escapeHtml = function (str) {
     if (str == null) return '';

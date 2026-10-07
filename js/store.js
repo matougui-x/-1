@@ -11,9 +11,10 @@
  * 2. 业务规则全部集中在这里，页面只负责显示。校验、搜索、状态流转、
  *    认领验证这些容易出错的逻辑都写成"输入 → 输出"的形式，可以直接断言。
  *
- * 3. 隐藏特征答案是本项目的核心隐私。任何对外输出的对象都必须经过
- *    toPublic()，它会剥掉答案字段。列表、搜索、详情一律走 toPublic，
- *    只有 submitClaim() 会在内部比对答案，比对完也不返回答案本身。
+ * 3. 验证题的正确答案是本项目的核心隐私。任何对外输出的对象都必须经过
+ *    toPublic()，它会剥掉每道题的 answer 下标。列表、搜索、详情一律走 toPublic，
+ *    只有 submitClaim() 会在内部比对答案，而且比对完只回一个"通过 / 不通过"，
+ *    不回传"哪一题错了"——否则认领者可以靠排除法把答案试出来。
  *
  * 4. 没有账号体系（作业不要求实名认证），用本机 uid 判断"我的发布"。
  *    因此所有写操作都要带上 actor（当前用户 id），由 store 校验归属。
@@ -145,7 +146,6 @@
     contactNameMax: 20,
     contactDeptMax: 30,
     contactWayMin: 3, contactWayMax: 60,
-    answerMax: 20,
     futureToleranceMs: 5 * 60 * 1000   // 允许 5 分钟的"手快填成未来时间"
   };
 
@@ -246,52 +246,195 @@
       errors.contactWay = '联系方式不能超过 ' + LIMITS.contactWayMax + ' 个字';
     }
 
-    // 隐藏特征：只有招领需要，且至少填 2 项、答案不能为空
-    var hidden = normalizeHidden(data.hidden);
-    if (isFound) {
-      var filled = hidden.filter(function (item) { return item.a !== ''; });
-      if (filled.length < LF.VERIFY.minHidden) {
-        errors.hidden = '请至少设置 ' + LF.VERIFY.minHidden + ' 项只有失主知道的特征';
-      }
-      for (var i = 0; i < filled.length; i++) {
-        if (filled[i].a.length > LIMITS.answerMax) {
-          errors.hidden = '单条特征答案不能超过 ' + LIMITS.answerMax + ' 个字';
-          break;
-        }
-      }
-      if (filled.length > LF.VERIFY.maxHidden) {
-        errors.hidden = '最多设置 ' + LF.VERIFY.maxHidden + ' 项隐藏特征';
-      }
+    // 认领验证题：只有招领需要，3–5 道客观题，每题都必须指定正确答案
+    var questions = normalizeQuestions(data.questions);
+    if (isFound && !(opts.allowEmptyQuestions && questions.length === 0)) {
+      var questionError = checkQuestions(questions);
+      if (questionError) errors.questions = questionError;
     }
 
     return { ok: Object.keys(errors).length === 0, errors: errors };
   };
 
-  /** 把任意形态的 hidden 输入整理成 [{ q, a }]，过滤掉空问题名。 */
-  function normalizeHidden(hidden) {
-    var list = Array.isArray(hidden) ? hidden : [];
+  /**
+   * 把任意形态的 questions 输入整理成规范结构 [{ id, type, stem, options, answer }]。
+   *
+   * - 判断题的选项由系统固定为「正确 / 错误」，answer 取 0 / 1；
+   * - 选择题丢掉空白的选项行，并把正确答案的下标重新映射
+   *   （原来选中的那行是空的，就记 -1，交给校验环节报"还没有指定正确答案"）；
+   * - 题型不是 judge / choice 的整题丢弃，于是"题数不够"会自然被校验拦下。
+   */
+  function normalizeQuestions(questions) {
+    var list = Array.isArray(questions) ? questions : [];
     var out = [];
+
     for (var i = 0; i < list.length; i++) {
-      var item = list[i] || {};
-      var q = U.clean(item.q);
-      if (!q) continue;
-      out.push({ q: q, a: U.clean(item.a) });
+      var raw = list[i] || {};
+      var type = raw.type === 'judge' ? 'judge' : (raw.type === 'choice' ? 'choice' : '');
+      if (!type) continue;
+
+      var stem = U.clean(raw.stem);
+      var options;
+      var answer;
+
+      if (type === 'judge') {
+        options = LF.JUDGE_OPTIONS.slice();
+        answer = Number(raw.answer) === 1 ? 1 : 0;
+      } else {
+        var rawOptions = Array.isArray(raw.options) ? raw.options : [];
+        var wanted = Number(raw.answer);
+        options = [];
+        answer = -1;
+        for (var j = 0; j < rawOptions.length; j++) {
+          var text = U.clean(rawOptions[j]);
+          if (text === '') continue;
+          if (j === wanted) answer = options.length;
+          options.push(text);
+        }
+      }
+
+      out.push({
+        id: U.clean(raw.id) || ('q' + (i + 1)),
+        type: type,
+        stem: stem,
+        options: options,
+        answer: answer
+      });
     }
+
     return out;
+  }
+
+  /** 逐题校验，返回第一条错误提示（没有错误返回空串）。 */
+  function checkQuestions(list) {
+    var V = LF.VERIFY;
+
+    if (list.length < V.minQuestions) {
+      return '请至少出 ' + V.minQuestions + ' 道验证题（建议 ' + V.suggestedQuestions + ' 道）';
+    }
+    if (list.length > V.maxQuestions) {
+      return '最多只能出 ' + V.maxQuestions + ' 道验证题';
+    }
+
+    for (var i = 0; i < list.length; i++) {
+      var q = list[i];
+      var no = '第 ' + (i + 1) + ' 题';
+
+      if (q.stem.length < V.stemMin) return no + '的题目太短，至少 ' + V.stemMin + ' 个字';
+      if (q.stem.length > V.stemMax) return no + '的题目不能超过 ' + V.stemMax + ' 个字';
+      if (q.options.length < V.minOptions) return no + '至少要有 ' + V.minOptions + ' 个选项';
+      if (q.options.length > V.maxOptions) return no + '最多只能有 ' + V.maxOptions + ' 个选项';
+
+      for (var j = 0; j < q.options.length; j++) {
+        if (q.options[j].length > V.optionMax) {
+          return no + '的选项太长，单个选项不要超过 ' + V.optionMax + ' 个字';
+        }
+        if (q.options.indexOf(q.options[j]) !== j) {
+          return no + '有重复的选项，认领者没法区分';
+        }
+      }
+
+      if (q.answer < 0 || q.answer >= q.options.length) return no + '还没有指定正确答案';
+    }
+
+    return '';
+  }
+
+  /** 一条信息里结构完整的题目。展示与判定都只认这些题，脏数据不会拖垮流程。 */
+  function completeQuestions(post) {
+    var list = post && Array.isArray(post.questions) ? post.questions : [];
+    return list.filter(function (item) {
+      return item &&
+        (item.type === 'judge' || item.type === 'choice') &&
+        U.clean(item.stem) !== '' &&
+        Array.isArray(item.options) &&
+        item.options.length >= LF.VERIFY.minOptions &&
+        Number(item.answer) >= 0 &&
+        Number(item.answer) < item.options.length;
+    });
+  }
+
+  /**
+   * 一道题的对外形态。
+   * ★ 必须重新造对象：直接把内部题目交出去，answer 就跟着泄漏了。
+   */
+  function publicQuestion(item) {
+    return {
+      id: item.id,
+      type: item.type,
+      typeName: LF.questionTypeOf(item.type).name,
+      stem: item.stem,
+      options: item.options.slice()
+    };
+  }
+
+  /** 剩余作答次数（数值被外部改坏时退回上限）。 */
+  function attemptsLeftOf(post) {
+    var left = Number(post && post.attemptsLeft);
+    if (isNaN(left)) left = LF.VERIFY.maxAttempts;
+    return U.clamp(Math.floor(left), 0, LF.VERIFY.maxAttempts);
+  }
+
+  /** 认领者是否已经选好某一题的答案。 */
+  function isChosen(value, optionCount) {
+    if (value === null || value === undefined || value === '') return false;
+    var n = Number(value);
+    return !isNaN(n) && Math.floor(n) === n && n >= 0 && n < optionCount;
+  }
+
+  /**
+   * 旧数据迁移（DATA_VERSION 1 → 2）。
+   *
+   * 第一版的"隐藏特征"是发布者手打的自由文本答案，没法自动变成客观题，
+   * 所以这里只保留公开字段，把验证降级为"关闭"，并记下旧特征的名称，
+   * 由「我的发布」提示发布者重新出题。宁可少一个功能，也不编造答案。
+   */
+  function migratePost(input) {
+    var post = input;
+    if (!post || typeof post !== 'object') return { post: post, changed: false };
+
+    var changed = false;
+
+    if (!Array.isArray(post.questions)) {
+      var legacy = Array.isArray(post.hidden) ? post.hidden : [];
+      var filled = legacy.filter(function (item) { return item && U.clean(item.a) !== ''; });
+      post.questions = [];
+      delete post.hidden;
+      if (filled.length) {
+        post.legacyVerify = true;
+        post.legacyHidden = filled.map(function (item) { return U.clean(item.q); }).filter(Boolean);
+      }
+      changed = true;
+    }
+
+    if (typeof post.attemptsLeft !== 'number' || isNaN(post.attemptsLeft)) {
+      post.attemptsLeft = LF.VERIFY.maxAttempts;
+      changed = true;
+    }
+    if (!Array.isArray(post.claims)) { post.claims = []; changed = true; }
+    if (!Array.isArray(post.appeals)) { post.appeals = []; changed = true; }
+    if ('revealMode' in post) { delete post.revealMode; changed = true; }
+    if ('pendingClaim' in post) { delete post.pendingClaim; changed = true; }
+
+    return { post: post, changed: changed };
   }
 
   // ================================================================ 公开视图
 
-  /** 招领信息设置了隐藏特征时，非发布者必须通过验证才能看到联系方式。 */
+  /** 招领信息设置了验证题时，非发布者必须答对全部题目才能看到联系方式。 */
   function needsVerify(post) {
-    return post.type === 'found' && Array.isArray(post.hidden) && post.hidden.length > 0;
+    return post.type === 'found' && completeQuestions(post).length > 0;
   }
 
   LF.needsVerify = needsVerify;
 
   /**
    * 把内部数据转成可以安全交给页面的对象。
-   * ★ 这里删除 hidden 里的答案，只保留问题的"名字"，是防冒领的第一道闸门。
+   * ★ 这里有三样东西必须剥掉：
+   *   1. 每道题的 answer（正确答案下标）——泄漏了等于把钥匙给了冒领的人；
+   *   2. claims（认领记录）——里面有认领者提交的选择；
+   *   3. appeals（申诉记录）——里面有申诉人的姓名和联系方式。
+   *   认领者只能拿到"自己那一条申诉"的进度。
    */
   LF.toPublic = function (post, options) {
     var opts = options || {};
@@ -302,21 +445,40 @@
       if (Object.prototype.hasOwnProperty.call(post, key)) out[key] = post[key];
     }
 
-    var hidden = Array.isArray(post.hidden) ? post.hidden : [];
-    out.hiddenCount = hidden.filter(function (item) { return item.a !== ''; }).length;
-    // 只暴露"隐藏了哪些特征"，答案本身绝不外传
-    out.hiddenLabels = hidden
-      .filter(function (item) { return item.a !== ''; })
-      .map(function (item) { return item.q; });
+    var questions = completeQuestions(post);
+    out.questionCount = questions.length;
+    out.questionMix = LF.questionMix(questions);
+    out.questions = questions.map(publicQuestion);
 
-    delete out.hidden;
+    delete out.hidden;          // 旧版字段，迁移后不应再出现
     delete out.pendingClaim;
-    delete out.ownerId;        // 归属关系用 isOwner 表达，不直接把 uid 交给页面
+    delete out.claims;
+    delete out.appeals;
+    delete out.legacyHidden;    // 只有"我的发布"需要旧特征名，改用下面的数量提示
+    delete out.ownerId;         // 归属关系用 isOwner 表达，不直接把 uid 交给页面
 
     var isOwner = !!opts.viewerId && opts.viewerId === post.ownerId;
     out.isOwner = isOwner;
     out.needVerify = needsVerify(post);
-    out.locked = out.needVerify && !isOwner && !opts.unlocked;
+    out.attemptsLeft = attemptsLeftOf(post);
+    out.legacyVerify = !!post.legacyVerify;
+    out.legacyHiddenCount = Array.isArray(post.legacyHidden) ? post.legacyHidden.length : 0;
+
+    // 申诉通道：3 次全败后解锁。发布者看全部，认领者只能看自己那一条。
+    var appeals = Array.isArray(post.appeals) ? post.appeals : [];
+    var mine = null;
+    for (var a = 0; a < appeals.length; a++) {
+      if (appeals[a] && appeals[a].claimantId && appeals[a].claimantId === opts.viewerId) mine = appeals[a];
+    }
+    out.appealCount = isOwner ? appeals.length : 0;
+    out.appealPending = isOwner
+      ? appeals.filter(function (item) { return item.decision === 'pending'; }).length
+      : 0;
+    out.myAppeal = (!isOwner && mine) ? publicAppeal(mine, false) : null;
+    out.appealApproved = !!(mine && mine.decision === 'approved');
+    out.canAppeal = !isOwner && out.needVerify && post.status !== 'done' && out.attemptsLeft <= 0;
+
+    out.locked = out.needVerify && !isOwner && !opts.unlocked && !out.appealApproved;
 
     if (out.locked) {
       out.contactWay = '';     // 未解锁：联系方式根本不进页面
@@ -337,13 +499,31 @@
     out.typeTag = LF.typeOf(post.type).tag;
     out.thumb = (post.photos && post.photos.length) ? post.photos[0] : LF.categoryOf(post.category).icon;
 
-    // 认领统计：给"我的发布"用；对非发布者只给一个 0，避免泄露有多少人在认领
+    // 认领统计：给"我的发布"用；对非发布者只给 0，避免泄露有多少人在认领
     var claims = Array.isArray(post.claims) ? post.claims : [];
     out.claimCount = isOwner ? claims.length : 0;
     out.claimPassed = isOwner ? claims.filter(function (c) { return c.passed; }).length : 0;
 
     return out;
   };
+
+  /** 申诉记录的对外形态：认领者只看自己的进度，发布者才看得到申诉明细。 */
+  function publicAppeal(appeal, withClaimant) {
+    var out = {
+      id: appeal.id,
+      at: appeal.at,
+      decision: appeal.decision || 'pending',
+      note: appeal.note || '',
+      voucher: appeal.voucher || ''
+    };
+    if (withClaimant) {
+      out.name = appeal.name || '';
+      out.contact = appeal.contact || '';
+      out.detail = appeal.detail || '';
+      out.decidedAt = appeal.decidedAt || null;
+    }
+    return out;
+  }
 
   /** 姓名打码：张三四 → 张**，用于公开页面的"发布人"一行。 */
   function maskName(name) {
@@ -412,7 +592,7 @@
 
   /**
    * @param {object} storage 具备 getItem/setItem/removeItem 的存储对象
-   * @param {object} [options] { now: 固定当前时间（测试用）, random: 固定随机数（测试用） }
+   * @param {object} [options] { now: 固定当前时间（测试用） }
    */
   LF.createStore = function (storage, options) {
     var store = {};
@@ -421,10 +601,6 @@
 
     function now() {
       return opts.now ? U.parseTime(opts.now).getTime() : Date.now();
-    }
-
-    function random() {
-      return opts.random || Math.random;
     }
 
     // ------------------------------------------------------------ 原始读写
@@ -488,9 +664,12 @@
     function readPosts() {
       var list = readJson(LF.KEYS.posts, null);
       if (!Array.isArray(list)) return [];
-      // 过滤掉结构明显不对的脏数据，避免一条坏数据拖垮整个列表
+      // 过滤掉结构明显不对的脏数据，避免一条坏数据拖垮整个列表；
+      // 顺便把旧版本的数据就地升级（迁移是幂等的，迁移过的记录不会再变）
       return list.filter(function (item) {
         return item && typeof item === 'object' && typeof item.id === 'string';
+      }).map(function (item) {
+        return migratePost(item).post;
       });
     }
 
@@ -518,6 +697,31 @@
       if (readJson(LF.KEYS.posts, null) !== null) return { seeded: false };
       var result = writeJson(LF.KEYS.posts, seedPosts || seed);
       return { seeded: result.ok, error: result.message };
+    };
+
+    /**
+     * 把迁移结果落盘一次（bootstrap 里调用）。
+     * readPosts() 每次读都会迁移，但只存在内存里；这里做一次真正的写回，
+     * 免得旧数据每次打开都要重算一遍。返回被停用旧验证的条数。
+     */
+    store.migrate = function () {
+      var raw = readJson(LF.KEYS.posts, null);
+      if (!Array.isArray(raw)) return { ok: true, migrated: 0 };
+
+      var changed = false;
+      var legacyCount = 0;
+      var out = raw.filter(function (item) {
+        return item && typeof item === 'object' && typeof item.id === 'string';
+      }).map(function (item) {
+        var result = migratePost(item);
+        if (result.changed) changed = true;
+        if (result.post && result.post.legacyVerify) legacyCount++;
+        return result.post;
+      });
+
+      if (!changed) return { ok: true, migrated: legacyCount };
+      var written = writeJson(LF.KEYS.posts, out);
+      return { ok: written.ok, migrated: legacyCount, error: written.message };
     };
 
     // ------------------------------------------------------------ 读
@@ -606,9 +810,9 @@
         updatedAt: timestamp,
         views: 0,
         ownerId: actor,
-        hidden: data.type === 'found' ? normalizeHidden(data.hidden).filter(function (h) { return h.a !== ''; }) : [],
-        revealMode: data.revealMode || 'contact',
+        questions: data.type === 'found' ? normalizeQuestions(data.questions) : [],
         claims: [],
+        appeals: [],
         attemptsLeft: LF.VERIFY.maxAttempts
       };
 
@@ -646,9 +850,16 @@
         merged.views = original.views;
         merged.ownerId = original.ownerId;
         merged.claims = original.claims;
+        merged.appeals = original.appeals;
         merged.attemptsLeft = original.attemptsLeft;
 
-        var check = LF.validatePost(merged, { now: now() });
+        // 旧版遗留标记不能在编辑时被前端顺手抹掉，由这里决定去留
+        var wasLegacy = !!original.legacyVerify;
+
+        var check = LF.validatePost(merged, {
+          now: now(),
+          allowEmptyQuestions: wasLegacy       // 旧信息允许先只改标题，验证题留待以后补
+        });
         if (!check.ok) return { ok: false, errors: check.errors };
 
         merged.title = U.clean(merged.title);
@@ -658,9 +869,23 @@
         merged.contactDept = U.clean(merged.contactDept);
         merged.contactWay = U.clean(merged.contactWay);
         merged.happenedAt = U.parseTime(merged.happenedAt).toISOString();
-        merged.hidden = merged.type === 'found'
-          ? normalizeHidden(merged.hidden).filter(function (h) { return h.a !== ''; })
-          : [];
+        merged.questions = merged.type === 'found' ? normalizeQuestions(merged.questions) : [];
+
+        // 题目被换掉了，之前失败的那几次不应该继续占用新题的次数
+        var before = JSON.stringify(completeQuestions(original));
+        if (JSON.stringify(completeQuestions(merged)) !== before) {
+          merged.attemptsLeft = LF.VERIFY.maxAttempts;
+        }
+
+        // 重新出好题之后，旧版标记就该撤掉（撤掉后才会重新要求验证）
+        if (wasLegacy && completeQuestions(merged).length > 0) {
+          delete merged.legacyVerify;
+          delete merged.legacyHidden;
+        } else if (wasLegacy) {
+          merged.legacyVerify = true;
+          if (Array.isArray(original.legacyHidden)) merged.legacyHidden = original.legacyHidden;
+        }
+
         merged.updatedAt = now();
 
         list[i] = merged;
@@ -727,127 +952,129 @@
     // ------------------------------------------------------------ 认领验证
 
     /**
-     * 开始一次认领验证：从发布者设置的隐藏特征里随机抽题。
-     * 抽中的题目名记在 pendingClaim 里，提交时只认这组题，
-     * 避免认领人自己拼一组题反复试答案。
+     * 开始一次认领验证：把发布者出的题全部取回来。
+     *
+     * 第二版方案是"一次性答完所有题"，不再随机抽题，所以这里不再写 pendingClaim：
+     * 判定只认信息里存的题目，认领者拼不出自己的题，也躲不开要答的题。
+     * 返回的题目对象里没有 answer，正确答案始终留在数据层。
      */
     store.startClaim = function (id) {
       var post = findPost(id);
       if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
       if (!needsVerify(post)) return { ok: false, message: '这条信息不需要验证，可以直接联系发布者' };
       if (post.status === 'done') return { ok: false, message: '这条信息已完成，无需再认领' };
-      if (remainAttempts(post) <= 0) {
-        return { ok: false, locked: true, message: '尝试次数已用完，请申请人工核对' };
+
+      var left = attemptsLeftOf(post);
+      if (left <= 0) {
+        return {
+          ok: false, locked: true, canAppeal: true, remaining: 0,
+          message: '尝试次数已用完，请提交申诉走人工审核'
+        };
       }
 
-      var unanswered = post.hidden.filter(function (item) { return item.a !== ''; });
-      var picked = U.pickRandom(unanswered, LF.VERIFY.pickCount, random());
-
-      var list = readPosts();
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].id === id) {
-          list[i].pendingClaim = {
-            questions: picked.map(function (item) { return item.q; }),
-            at: now()
-          };
-          writePosts(list);
-          break;
-        }
-      }
-
+      var questions = completeQuestions(post);
       return {
         ok: true,
-        questions: picked.map(function (item) {
-          return { q: item.q, ask: LF.askOf(post.category, item.q) };
-        }),
-        remaining: remainAttempts(post),
+        questions: questions.map(publicQuestion),
+        questionCount: questions.length,
+        questionMix: LF.questionMix(questions),
+        remaining: left,
         maxAttempts: LF.VERIFY.maxAttempts
       };
     };
 
-    function remainAttempts(post) {
-      var left = Number(post.attemptsLeft);
-      if (isNaN(left)) left = LF.VERIFY.maxAttempts;
-      return U.clamp(left, 0, LF.VERIFY.maxAttempts);
-    }
-
     /**
-     * 提交认领答案。
-     * @param {string} id
-     * @param {object|Array} answers 形如 { '卡面姓名': '王小明' } 或 [{ q, a }]
-     * @returns {{ok, passed, remaining, failed, voucher, contact|null, message}}
+     * 提交认领答案：一次性提交全部题目。
      *
-     * 答案比对前会做归一化（去空格、全角转半角、忽略大小写与常见标点），
-     * 所以"王小明""王 小明""王小明。"都算对。
+     * @param {string} id
+     * @param {object|Array} answers { 题目id: 选项下标 } 或 [{ id, choice }]
+     * @returns {{ok, passed, remaining, maxAttempts, message, canAppeal, locked,
+     *            voucher?, contact?, questionCount?, correctCount?}}
+     *
+     * ★ 系统统一判定，不告诉认领者具体哪题错：未通过时只回一句
+     *   "回答的细节与描述不符"。否则答错一次就等于排除一个选项，
+     *   3 次机会足够把答案试出来，限制次数也就白设了。
      */
     store.submitClaim = function (id, answers) {
       var post = findPost(id);
       if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!needsVerify(post)) return { ok: false, message: '这条信息不需要验证' };
+      if (post.status === 'done') return { ok: false, message: '这条信息已完成，无需再认领' };
 
-      var pending = post.pendingClaim;
-      if (!pending || !pending.questions || !pending.questions.length) {
-        return { ok: false, message: '验证已失效，请重新进入认领页面' };
-      }
-
-      var left = remainAttempts(post);
+      var left = attemptsLeftOf(post);
       if (left <= 0) {
-        return { ok: false, locked: true, remaining: 0, message: '尝试次数已用完，请申请人工核对' };
-      }
-
-      var answerMap = toAnswerMap(answers);
-      var hiddenMap = {};
-      post.hidden.forEach(function (item) { hiddenMap[item.q] = item.a; });
-
-      var failed = [];
-      pending.questions.forEach(function (q) {
-        var expected = U.normalizeAnswer(hiddenMap[q]);
-        var actual = U.normalizeAnswer(answerMap[q]);
-        if (!expected || expected !== actual) {
-          failed.push({ q: q, input: U.truncate(U.clean(answerMap[q]), 20) });
-        }
-      });
-
-      var passed = failed.length === 0;
-      var list = readPosts();
-      var updated = null;
-
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].id !== id) continue;
-        var record = {
-          at: now(),
-          passed: passed,
-          answers: pending.questions.map(function (q) {
-            return { q: q, a: U.truncate(U.clean(answerMap[q]), 20) };
-          })
+        return {
+          ok: false, locked: true, canAppeal: true, remaining: 0,
+          message: '尝试次数已用完，请提交申诉走人工审核'
         };
-
-        if (passed) {
-          record.voucher = U.voucherCode(id, pending.questions.join('|'), now());
-          list[i].claims = (list[i].claims || []).concat([record]);
-        } else {
-          list[i].claims = (list[i].claims || []).concat([record]);
-          list[i].attemptsLeft = left - 1;
-        }
-        delete list[i].pendingClaim;
-        updated = list[i];
-        break;
       }
 
-      writePosts(list);
+      var questions = completeQuestions(post);
+      var answerMap = toAnswerMap(answers);
+      var unanswered = questions.filter(function (question) {
+        return !isChosen(answerMap[question.id], question.options.length);
+      });
+      if (unanswered.length) {
+        return { ok: false, message: '还有 ' + unanswered.length + ' 道题没有作答' };
+      }
+
+      var correctCount = 0;
+      var record = {
+        at: now(),
+        passed: false,
+        answers: questions.map(function (question) {
+          var choice = Number(answerMap[question.id]);
+          var correct = choice === Number(question.answer);
+          if (correct) correctCount++;
+          return {
+            id: question.id,
+            type: question.type,
+            stem: question.stem,
+            choice: choice,
+            choiceText: question.options[choice],
+            correct: correct
+          };
+        })
+      };
+
+      var passed = correctCount === questions.length;
+      record.passed = passed;
+
+      var list = readPosts();
+      var index = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { index = i; break; }
+      }
+      if (index === -1) return { ok: false, message: '这条信息不存在或已被删除' };
+
+      var voucher = '';
+      if (passed) {
+        voucher = U.voucherCode(id, String(post.createdAt || ''), now());
+        record.voucher = voucher;
+      }
+
+      list[index].claims = (list[index].claims || []).concat([record]);
+      list[index].appeals = list[index].appeals || [];
+      if (!passed) list[index].attemptsLeft = left - 1;
+
+      var written = writePosts(list);
+      if (!written.ok) return { ok: false, message: written.message };
 
       if (!passed) {
+        var remaining = left - 1;
         return {
           ok: true,
           passed: false,
-          remaining: left - 1,
+          remaining: remaining,
           maxAttempts: LF.VERIFY.maxAttempts,
-          failed: failed,
-          locked: left - 1 <= 0
+          locked: remaining <= 0,
+          canAppeal: remaining <= 0,
+          questionCount: questions.length,
+          message: '回答的细节与描述不符'
         };
       }
 
       // 通过：记下解锁状态，之后同一台设备再看这条信息可以直接看到联系方式
-      var voucher = U.voucherCode(id, pending.questions.join('|'), now());
       store.markUnlocked(id, voucher);
       var fresh = findPost(id);
 
@@ -855,8 +1082,10 @@
         ok: true,
         passed: true,
         remaining: left,
+        maxAttempts: LF.VERIFY.maxAttempts,
+        questionCount: questions.length,
+        correctCount: correctCount,
         voucher: voucher,
-        verifiedLabels: pending.questions.slice(),
         contact: {
           name: fresh.contactName,
           dept: fresh.contactDept,
@@ -869,7 +1098,7 @@
       var map = {};
       if (Array.isArray(answers)) {
         answers.forEach(function (item) {
-          if (item && item.q) map[item.q] = item.a == null ? '' : item.a;
+          if (item && item.id) map[item.id] = item.choice;
         });
       } else if (answers && typeof answers === 'object') {
         for (var key in answers) {
@@ -892,13 +1121,210 @@
           return {
             at: item.at,
             passed: item.passed,
-            answers: item.answers || [],
+            answers: (item.answers || []).map(function (answer) {
+              return {
+                stem: answer.stem || '',
+                type: answer.type || 'choice',
+                choiceText: answer.choiceText == null ? '（未作答）' : answer.choiceText,
+                correct: !!answer.correct
+              };
+            }),
             voucher: item.voucher || ''
           };
         }),
-        remaining: remainAttempts(post),
-        hiddenLabels: post.hidden.map(function (item) { return item.q; })
+        remaining: attemptsLeftOf(post),
+        questionCount: completeQuestions(post).length
       };
+    };
+
+    /**
+     * 编辑时取回完整记录（含每道题的正确答案），只有发布者本人拿得到。
+     * 页面用它回填表单；公开视图永远不带 answer。
+     */
+    store.getEditable = function (id, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, message: '只有发布者本人可以编辑这条信息' };
+      }
+
+      var out = JSON.parse(JSON.stringify(post));
+      out.questions = completeQuestions(post).map(function (item) {
+        return {
+          id: item.id,
+          type: item.type,
+          stem: item.stem,
+          options: item.options.slice(),
+          answer: item.answer
+        };
+      });
+      return { ok: true, post: out };
+    };
+
+    // ------------------------------------------------------------ 申诉（人工审核通道）
+
+    /**
+     * 提交申诉：认领者 3 次全败之后才会走到这里。
+     *
+     * 这里刻意把它做成"落库的表单"而不是一个弹窗文案：
+     * 发布者需要在「我的发布」里看到申诉人写的物品细节和联系方式，
+     * 才能判断到底是机器判错了，还是又一个人来冒领。
+     */
+    store.submitAppeal = function (id, input, claimantId) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!needsVerify(post)) return { ok: false, message: '这条信息不需要验证，可以直接联系发布者' };
+      if (!claimantId) return { ok: false, message: '无法确认本机身份，请刷新页面后重试' };
+      if (post.ownerId === claimantId) {
+        return { ok: false, message: '这是你自己发布的信息，不需要申诉' };
+      }
+      if (post.status === 'done') return { ok: false, message: '这条信息已经完成，无需再申诉' };
+      if (attemptsLeftOf(post) > 0) {
+        return {
+          ok: false,
+          message: '还有 ' + attemptsLeftOf(post) + ' 次作答机会，3 次机会用完之后才能申诉'
+        };
+      }
+
+      var data = input || {};
+      var name = U.clean(data.name);
+      var contact = U.clean(data.contact);
+      var detail = U.clean(data.detail);
+      var errors = {};
+
+      if (!name) errors.name = '请填写你的称呼';
+      else if (name.length > LF.APPEAL.nameMax) {
+        errors.name = '称呼不能超过 ' + LF.APPEAL.nameMax + ' 个字';
+      }
+
+      if (!contact) errors.contact = '请填写联系方式';
+      else if (contact.length < LF.APPEAL.contactMin) {
+        errors.contact = '联系方式太短了，请写清楚（比如"微信：abc123"）';
+      } else if (contact.length > LF.APPEAL.contactMax) {
+        errors.contact = '联系方式不能超过 ' + LF.APPEAL.contactMax + ' 个字';
+      }
+
+      if (!detail) errors.detail = '请写清楚你能提供的物品细节';
+      else if (detail.length < LF.APPEAL.detailMin) {
+        errors.detail = '至少写 ' + LF.APPEAL.detailMin + ' 个字，细节写得越具体越容易被认可';
+      } else if (detail.length > LF.APPEAL.detailMax) {
+        errors.detail = '说明不能超过 ' + LF.APPEAL.detailMax + ' 个字';
+      }
+
+      if (Object.keys(errors).length) return { ok: false, errors: errors };
+
+      var list = readPosts();
+      var index = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { index = i; break; }
+      }
+      if (index === -1) return { ok: false, message: '这条信息不存在或已被删除' };
+
+      var appeals = Array.isArray(list[index].appeals) ? list[index].appeals : [];
+      for (var k = 0; k < appeals.length; k++) {
+        if (appeals[k].claimantId === claimantId && appeals[k].decision === 'pending') {
+          return { ok: false, message: '你已经提交过申诉，正在等待发布者处理' };
+        }
+      }
+
+      var appeal = {
+        id: U.uid('appeal'),
+        claimantId: claimantId,
+        name: name,
+        contact: contact,
+        detail: detail,
+        at: now(),
+        decision: 'pending',
+        note: '',
+        voucher: '',
+        decidedAt: null
+      };
+      appeals.push(appeal);
+      list[index].appeals = appeals;
+
+      var written = writePosts(list);
+      if (!written.ok) return { ok: false, message: written.message };
+      return { ok: true, appeal: publicAppeal(appeal, true) };
+    };
+
+    /** 认领者查看自己那条申诉的处理进度（只能看自己的）。 */
+    store.myAppeal = function (id, claimantId) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      var appeals = Array.isArray(post.appeals) ? post.appeals : [];
+      var found = null;
+      for (var i = 0; i < appeals.length; i++) {
+        if (appeals[i].claimantId === claimantId) found = appeals[i];
+      }
+      return { ok: true, appeal: found ? publicAppeal(found, true) : null };
+    };
+
+    /** 发布者查看收到的人工审核申请（含申诉人写的物品细节）。 */
+    store.listAppeals = function (id, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, message: '只有发布者本人可以查看人工审核申请' };
+      }
+      var appeals = Array.isArray(post.appeals) ? post.appeals : [];
+      return {
+        ok: true,
+        appeals: appeals.map(function (item) { return publicAppeal(item, true); }),
+        pending: appeals.filter(function (item) { return item.decision === 'pending'; }).length
+      };
+    };
+
+    /**
+     * 发布者处理申诉：同意交还 / 驳回，可以附一句说明。
+     * 同意之后，该认领者再看这条信息就能直接看到联系方式（不用再答题）。
+     */
+    store.resolveAppeal = function (id, appealId, decision, note, actor) {
+      var post = findPost(id);
+      if (!post) return { ok: false, message: '这条信息不存在或已被删除' };
+      if (!actor || post.ownerId !== actor) {
+        return { ok: false, message: '只有发布者本人可以处理人工审核申请' };
+      }
+
+      var wanted = decision === 'approved' ? 'approved' : (decision === 'rejected' ? 'rejected' : '');
+      if (!wanted) return { ok: false, message: '请选择处理结果' };
+
+      var list = readPosts();
+      var index = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { index = i; break; }
+      }
+      if (index === -1) return { ok: false, message: '这条信息不存在或已被删除' };
+
+      var appeals = Array.isArray(list[index].appeals) ? list[index].appeals : [];
+      var target = null;
+      for (var k = 0; k < appeals.length; k++) {
+        if (appeals[k].id === appealId) target = appeals[k];
+      }
+      if (!target) return { ok: false, message: '这条申诉不存在' };
+      if (target.decision !== 'pending') return { ok: false, message: '这条申诉已经处理过了' };
+
+      target.decision = wanted;
+      target.note = U.truncate(U.clean(note), 100);
+      target.decidedAt = now();
+      if (wanted === 'approved') {
+        // 给一个线下交接用的编号，认领者在小程序里能看到
+        target.voucher = U.voucherCode(id, target.id, now());
+      }
+
+      var written = writePosts(list);
+      if (!written.ok) return { ok: false, message: written.message };
+      return { ok: true, appeal: publicAppeal(target, true) };
+    };
+
+    /** 暂存最近一次提交的申诉，申诉页刷新后还能看到结果。 */
+    store.saveLastAppeal = function (data) {
+      writeJson(LF.KEYS.lastAppeal, data);
+      return data;
+    };
+
+    store.readLastAppeal = function () {
+      var data = readJson(LF.KEYS.lastAppeal, null);
+      return (data && typeof data === 'object') ? data : null;
     };
 
     // ------------------------------------------------------------ 解锁状态（认领人本机）
@@ -1073,11 +1499,13 @@
     var myId = store.myId();
     var seedPosts = LF.buildSeedPosts ? LF.buildSeedPosts(new Date(), myId) : [];
     var seeded = store.init(seedPosts);
+    var migrated = store.migrate();      // 旧版本的数据就地升级
     return {
       store: store,
       adapter: adapter,
       myId: myId,
       seeded: seeded.seeded,
+      migrated: migrated.migrated,
       persistent: adapter.persistent !== false
     };
   };

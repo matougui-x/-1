@@ -73,9 +73,9 @@
     <text x="667" y="470" font-size="11.5" fill="#5A6470">校验是否为发布者本人</text>
 
     <rect x="798" y="404" width="262" height="88" rx="10" fill="#FFFDF6" stroke="#F0D9A8"/>
-    <text x="929" y="430" font-weight="bold" fill="#B26A00">认领比对（防冒领核心）</text>
-    <text x="929" y="452" font-size="11.5" fill="#8A6100">随机抽 2 项 → 归一化比对答案</text>
-    <text x="929" y="470" font-size="11.5" fill="#8A6100">扣次数、3 次锁定、生成凭证码</text>
+    <text x="929" y="430" font-weight="bold" fill="#B26A00">认领验证（防冒领核心）</text>
+    <text x="929" y="452" font-size="11.5" fill="#8A6100">展示全部客观题 → 统一判定（不回显错题）</text>
+    <text x="929" y="470" font-size="11.5" fill="#8A6100">扣次数、3 次全败解锁申诉、生成凭证码</text>
   </g>
 
   <!-- 箭头 3→4 -->
@@ -100,6 +100,6 @@
 
   <!-- 关键约束说明 -->
   <rect x="40" y="658" width="1040" height="46" rx="10" fill="#FFF9EC" stroke="#F0D9A8"/>
-  <text x="60" y="678" font-size="12.5" fill="#8A6100">🔒 关键约束：数据层向上返回的每一个对象都经过 toPublic() 处理，<tspan font-weight="bold">隐藏特征的答案在这一步就被剥离</tspan>。</text>
-  <text x="60" y="696" font-size="12.5" fill="#8A6100">因此首页、搜索结果、详情页拿到的数据里根本不存在答案——不是靠界面藏起来，而是数据本身就没传出来。</text>
+  <text x="60" y="678" font-size="12.5" fill="#8A6100">🔒 关键约束：数据层向上返回的每一个对象都经过 toPublic() 处理，<tspan font-weight="bold">每道题的 answer 下标、认领记录与申诉明细都在这一步被剥离</tspan>。</text>
+  <text x="60" y="696" font-size="12.5" fill="#8A6100">因此首页、搜索结果、详情页、答题页拿到的数据里根本不存在正确答案——不是靠界面藏起来，而是数据本身就没传出来。</text>
 </svg>

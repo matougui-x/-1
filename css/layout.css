@@ -479,7 +479,7 @@ body.no-tabbar .toast-wrap {
   color: var(--ink-3);
 }
 
-/* 隐藏特征区块整体用米黄底，提示"这块内容不对外显示" */
+/* 认领验证题区块整体用米黄底，提示"这块内容只有答对的人才看得到联系方式" */
 .form-section.is-locked {
   background: #FFFDF6;
   border: 1px solid var(--lock-line);

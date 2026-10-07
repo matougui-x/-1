@@ -1,11 +1,12 @@
 /*!
  * 认领验证（答题页）
  *
- * 流程：进入时向数据层要一组题（startClaim，随机抽 2 项隐藏特征）→
- *       认领人作答 → 提交比对（submitClaim）→ 跳结果页。
+ * 第二版方案：发布者出的是客观题，认领者一次性填完所有题再提交。
+ * 流程：进入时向数据层要全部题目（startClaim）→ 认领人逐题点选项 →
+ *       提交（submitClaim）→ 跳结果页。
  *
- * 这里刻意不做"前端对答案"：题目对象里根本没有答案，
- * 提交也是把答案交回数据层比对。页面拿不到正确答案，改前端也没用。
+ * 这里刻意不做"前端对答案"：题目对象里根本没有 answer，
+ * 提交也是把选项下标交回数据层比对。页面拿不到正确答案，改前端也没用。
  */
 (function (root) {
   'use strict';
@@ -35,6 +36,10 @@
     ui.markReady({ page: 'verify', ok: 0 });
   }
 
+  function detailLink(text, primary) {
+    return { text: text, href: 'detail.html?id=' + encodeURIComponent(postId), primary: primary };
+  }
+
   // ---------------------------------------------------------------- 前置检查
 
   if (!post) {
@@ -42,15 +47,15 @@
       [{ text: '返回首页', href: 'index.html', primary: true }]);
   } else if (post.isOwner) {
     deadEnd('🙋', '这是你自己发布的信息',
-      '发布者不需要认领自己的招领信息。你可以到「我的发布」里查看收到的认领申请。',
+      '发布者不需要认领自己的招领信息。你可以到「我的发布」里查看收到的认领申请与人工审核申请。',
       [
         { text: '查看我的发布', href: 'mine.html', primary: true },
-        { text: '查看详情', href: 'detail.html?id=' + encodeURIComponent(post.id) }
+        detailLink('查看详情')
       ]);
   } else if (!post.needVerify) {
     deadEnd('📞', '这条信息不需要验证',
-      '发布者没有设置隐藏特征，你可以直接在详情页看到联系方式。',
-      [{ text: '去详情页联系发布者', href: 'detail.html?id=' + encodeURIComponent(post.id), primary: true }]);
+      '发布者没有设置认领验证题，你可以直接在详情页看到联系方式。',
+      [detailLink('去详情页联系发布者', true)]);
   } else if (post.status === 'done') {
     // 注意：renderEmpty 内部会统一转义，这里不要自己再转一次
     deadEnd('✅', '这条信息已经完成了',
@@ -69,13 +74,26 @@
     session = store.startClaim(postId);
 
     if (!session.ok) {
-      deadEnd(session.locked ? '🔒' : '⚠️',
-        session.locked ? '尝试次数已用完' : '暂时无法发起验证',
-        session.message + (session.locked ? '可以联系发布者申请人工核对，由他来判断。' : ''),
-        [
-          { text: '返回详情页', href: 'detail.html?id=' + encodeURIComponent(postId), primary: true },
-          { text: '回首页看看别的', href: 'index.html' }
-        ]);
+      // 3 次已经用完：这里直接把人引到申诉通道，而不是让他干看着
+      if (session.locked) {
+        var myAppeal = post.myAppeal;
+        deadEnd('🔒', '3 次作答机会已经用完',
+          (myAppeal && myAppeal.decision === 'pending')
+            ? '你已经提交过申诉，正在等待发布者人工审核。审核结果会显示在申诉页面里。'
+            : '按规则，答满 3 次仍未通过时可以提交申诉，由发布者人工判断是否把物品交还给你。',
+          [
+            {
+              text: (myAppeal && myAppeal.decision === 'pending') ? '查看我的申诉' : '去提交申诉',
+              href: 'appeal.html?id=' + encodeURIComponent(postId),
+              primary: true
+            },
+            detailLink('返回详情页')
+          ]);
+        return;
+      }
+
+      deadEnd('⚠️', '暂时无法发起验证', session.message,
+        [detailLink('返回详情页', true), { text: '回首页看看别的', href: 'index.html' }]);
       return;
     }
 
@@ -88,11 +106,32 @@
       dots += '<span class="dot' + (i < remaining ? '' : ' is-off') + '"></span>';
     }
     return '<div class="attempt-dots">' + dots +
-      '<span>剩余尝试次数 ' + remaining + ' / ' + max + '</span></div>';
+      '<span>剩余作答次数 ' + remaining + ' / ' + max + '</span></div>';
+  }
+
+  function optionHtml(question, index) {
+    return '<label class="q-option">' +
+      '<input type="radio" name="ans_' + esc(question.id) + '" value="' + index + '" ' +
+        'data-qid="' + esc(question.id) + '">' +
+      '<span class="q-option-text">' + esc(question.options[index]) + '</span>' +
+      '</label>';
+  }
+
+  function questionHtml(question, index) {
+    return '<div class="question-card" data-qid="' + esc(question.id) + '" data-type="' + esc(question.type) + '">' +
+      '<div class="q-title"><i>Q' + (index + 1) + '</i><span>' + esc(question.stem) + '</span>' +
+        '<span class="chip chip-lock">' + esc(question.typeName) + '</span></div>' +
+      '<div class="q-options">' +
+        question.options.map(function (option, optionIndex) {
+          return optionHtml(question, optionIndex);
+        }).join('') +
+      '</div>' +
+    '</div>';
   }
 
   function render() {
     var questions = session.questions;
+    var mix = session.questionMix;
 
     contentEl.innerHTML =
       // 顶部信息条：确认自己在认领哪一条
@@ -106,44 +145,26 @@
 
       '<div class="lockbox mt-12">' +
         '<span class="ic">🔒</span>' +
-        '<span>该信息有 <b>' + post.hiddenCount + ' 项关键特征</b>被发布者隐藏（' +
-        esc(post.hiddenLabels.join(' / ')) + '）。' +
-        '<span class="lk">系统随机抽取 ' + questions.length + ' 项请你作答，' +
-        '全部正确才会显示发布者的联系方式。</span></span>' +
+        '<span>发布者出了 <b>' + questions.length + ' 道验证题</b>（判断题 ' + mix.judge +
+        ' 道 · 选择题 ' + mix.choice + ' 道）。' +
+        '<span class="lk">请一次性填完全部题目再提交，全部答对才会显示发布者的联系方式并生成认领凭证。' +
+        '系统统一判定，答错时不会告诉你是哪一题错。</span></span>' +
       '</div>' +
 
       '<div class="mt-16">' + attemptDots(session.remaining, session.maxAttempts) + '</div>' +
 
-      questions.map(function (question, index) {
-        return '<div class="question-card" data-q="' + esc(question.q) + '">' +
-          '<div class="q-title"><i>Q' + (index + 1) + '</i><span>' + esc(question.ask) + '</span></div>' +
-          '<div class="q-desc">请如实填写你在物品上看到的特征，用于和发布者设置的内容比对</div>' +
-          '<input class="input" data-answer maxlength="20" autocomplete="off" ' +
-            'placeholder="在这里填写答案" aria-label="' + esc(question.ask) + '">' +
-          '</div>';
-      }).join('') +
+      questions.map(questionHtml).join('') +
+
+      '<div class="quiz-progress text-small text-muted mt-12" id="answerProgress"></div>' +
 
       '<p class="text-small text-muted mt-12">' +
-        '提交后答案仅用于与发布者设置的隐藏特征比对，不会展示给其他用户；' +
+        '提交后答案仅用于与发布者设置的题目比对，不会展示给其他用户；' +
         '通过验证后你的昵称与联系方式会同步给发布者。' +
-      '</p>' +
+        '最多可以答 ' + session.maxAttempts + ' 次，3 次都没通过时可以提交申诉走人工审核。' +
+      '</p>';
 
-      '<div class="text-center mt-12">' +
-        '<a class="link-muted" href="detail.html?id=' + encodeURIComponent(postId) + '">' +
-        '—— 答错了会怎样？先看看会发生什么 ——</a>' +
-      '</div>';
-
-    // 回车提交，手机上少点一次。
-    // 但答案大多是中文（"蓝色小熊贴纸"这种），用输入法选词时按回车是「确认候选词」，
-    // 不是「提交」，必须放过去——否则打到一半就被提交了。
-    ui.qsa('[data-answer]', contentEl).forEach(function (input) {
-      input.addEventListener('keydown', function (event) {
-        if (event.isComposing || event.keyCode === 229) return;
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          submit();
-        }
-      });
+    ui.qsa('[data-qid]', contentEl).forEach(function (input) {
+      input.addEventListener('change', updateProgress);
     });
 
     actionBar.innerHTML = '';
@@ -156,33 +177,63 @@
     actionBar.appendChild(backBtn);
     actionBar.appendChild(submitBtn);
 
-    var first = ui.qs('[data-answer]', contentEl);
-    if (first) first.focus();
-
+    updateProgress();
     ui.markReady({ page: 'verify', ok: 1, questions: questions.length });
+  }
+
+  /** 已答 / 未答的实时提示，省得提交时才被告知漏了题。 */
+  function updateProgress() {
+    var total = session.questions.length;
+    var answered = collectAnswers().filter(function (item) { return item.answered; }).length;
+    var el = ui.qs('#answerProgress');
+
+    // 选中的选项高亮（不依赖 :has()，老一点的浏览器也能看出来选了什么）
+    ui.qsa('.q-option', contentEl).forEach(function (label) {
+      label.classList.toggle('is-picked', !!label.querySelector('input:checked'));
+    });
+
+    if (!el) return;
+
+    var missing = total - answered;
+    el.textContent = missing
+      ? '已作答 ' + answered + ' / ' + total + ' 题，还有 ' + missing + ' 题没有选择'
+      : '已作答 ' + total + ' / ' + total + ' 题，可以提交了';
+    el.style.color = missing ? 'var(--ink-3)' : 'var(--green-d)';
+  }
+
+  /** 读回每一题的选择；没选的记 answered: false。 */
+  function collectAnswers() {
+    return session.questions.map(function (question) {
+      var card = ui.qs('.question-card[data-qid="' + question.id + '"]', contentEl);
+      var picked = card ? card.querySelector('input[type="radio"]:checked') : null;
+      return {
+        id: question.id,
+        answered: !!picked,
+        choice: picked ? Number(picked.value) : -1
+      };
+    });
   }
 
   // ---------------------------------------------------------------- 提交
 
   function submit() {
-    var answers = ui.qsa('.question-card', contentEl).map(function (card) {
-      return {
-        q: card.getAttribute('data-q'),
-        a: U.clean(card.querySelector('[data-answer]').value)
-      };
-    });
+    var answers = collectAnswers();
+    var missing = answers.filter(function (item) { return !item.answered; });
 
-    var empty = answers.filter(function (item) { return item.a === ''; });
-    if (empty.length) {
-      ui.toast('还有 ' + empty.length + ' 道题没有填写', 'error');
-      var firstEmpty = ui.qs('.question-card[data-q="' + empty[0].q + '"] [data-answer]', contentEl);
-      if (firstEmpty) firstEmpty.focus();
+    if (missing.length) {
+      ui.toast('还有 ' + missing.length + ' 道题没有选择', 'error');
+      var firstCard = ui.qs('.question-card[data-qid="' + missing[0].id + '"]', contentEl);
+      if (firstCard) {
+        firstCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        var firstInput = firstCard.querySelector('input[type="radio"]');
+        if (firstInput) firstInput.focus({ preventScroll: true });
+      }
       return;
     }
 
     var btn = ui.qs('#submitBtn');
     btn.disabled = true;
-    btn.textContent = '比对中…';
+    btn.textContent = '判定中…';
 
     var result = store.submitClaim(postId, answers);
 
@@ -201,11 +252,11 @@
       passed: result.passed,
       remaining: result.remaining,
       maxAttempts: result.maxAttempts,
+      canAppeal: !!result.canAppeal,
+      questionCount: result.questionCount,
+      correctCount: result.correctCount,
       voucher: result.voucher || '',
-      failed: result.failed || [],
-      verifiedLabels: result.verifiedLabels || [],
-      contact: result.contact || null,
-      hiddenLabels: post.hiddenLabels
+      contact: result.contact || null
     });
 
     U.go('verify-result', { id: postId, r: result.passed ? 'ok' : 'fail' });

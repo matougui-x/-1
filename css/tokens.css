@@ -130,6 +130,16 @@ ol {
   border: 0;
 }
 
+/*
+ * hidden 属性必须真的隐藏。
+ * 浏览器默认样式里的 [hidden]{display:none} 会被作者样式里的 display:flex 覆盖
+ * （例如 .lockbox / .banner 这类自带 display 的组件），
+ * 于是"加个 hidden 属性藏起来"会静默失效。这里补一条，避免以后再踩。
+ */
+[hidden] {
+  display: none !important;
+}
+
 /* 尊重系统"减少动效"设置 */
 @media (prefers-reduced-motion: reduce) {
   * {

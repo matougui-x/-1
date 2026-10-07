@@ -47,13 +47,28 @@
     return parts.join(' ｜ ');
   }
 
-  /** 招领信息显示它保护了几项特征、收到过几次认领申请。 */
+  /** 招领信息显示它出了几道题、收到几次认领申请与人工审核申请。 */
   function claimLine(post) {
+    if (post.legacyVerify) {
+      return '<div class="lockbox" style="margin-bottom:11px"><span class="ic">⚠️</span>' +
+        '<span>旧版隐藏特征已停用' +
+        (post.legacyHiddenCount ? '（原有 ' + post.legacyHiddenCount + ' 项）' : '') +
+        '，这条信息暂时不需要验证。' +
+        '<span class="lk">点「编辑」重新出 3–5 道判断题 / 选择题，认领验证就会重新生效。</span></span></div>';
+    }
+
     if (!post.needVerify) return '';
-    var text = '隐藏特征 ' + post.hiddenCount + ' 项 ｜ 收到认领申请 ' + post.claimCount + ' 次';
+
+    var text = '验证题 ' + post.questionCount + ' 道（判断题 ' + post.questionMix.judge +
+      ' · 选择题 ' + post.questionMix.choice + '）｜ 收到认领申请 ' + post.claimCount + ' 次';
     if (post.claimCount > 0) {
       text += '（通过 ' + post.claimPassed + ' · 未通过 ' + (post.claimCount - post.claimPassed) + '）';
     }
+    if (post.appealCount > 0) {
+      text += '｜ 人工审核申请 ' + post.appealCount + ' 条' +
+        (post.appealPending > 0 ? '（待处理 ' + post.appealPending + '）' : '');
+    }
+
     return '<div class="lockbox" style="margin-bottom:11px">' +
       '<span class="ic">🔒</span><span>' + esc(text) + '</span></div>';
   }
@@ -69,6 +84,12 @@
     if (post.needVerify && post.claimCount > 0) {
       ops.push('<button type="button" class="btn btn-ghost btn-sm" data-op="claims">认领申请 ' +
         post.claimCount + '</button>');
+    }
+    if (post.appealCount > 0) {
+      ops.push('<button type="button" class="btn ' +
+        (post.appealPending > 0 ? 'btn-primary' : 'btn-ghost') + ' btn-sm" data-op="appeals">' +
+        (post.appealPending > 0 ? '人工审核 ' + post.appealPending + ' 待处理' : '人工审核申请 ' + post.appealCount) +
+        '</button>');
     }
     ops.push('<button type="button" class="btn btn-ghost btn-sm" data-op="edit">编辑</button>');
     ops.push('<button type="button" class="btn btn-danger btn-sm" data-op="delete">删除</button>');
@@ -148,6 +169,7 @@
     if (op === 'edit') return U.go('publish', { id: id });
     if (op === 'delete') return remove(post);
     if (op === 'claims') return showClaims(post);
+    if (op === 'appeals') return showAppeals(post);
   }
 
   function markDone(post) {
@@ -192,36 +214,12 @@
   }
 
   function showClaims(post) {
-    var result = store.listClaims(post.id, myId);
-    if (!result.ok) return ui.toast(result.message, 'error');
+    ui.claimsModal({ store: store, post: post, ownerId: myId });
+  }
 
-    var body = !result.claims.length
-      ? '<p class="text-muted">还没有人提交认领申请。</p>'
-      : result.claims.map(function (claim) {
-          return '<div class="claim-item">' +
-            '<div class="claim-head">' +
-              '<span class="chip ' + (claim.passed ? 'chip-ok' : 'chip-red') + '">' +
-                (claim.passed ? '验证通过' : '验证未通过') + '</span>' +
-              '<span class="claim-time">' + esc(U.formatRelative(claim.at)) + '</span>' +
-            '</div>' +
-            '<div class="claim-answers">' +
-              claim.answers.map(function (item) {
-                return '<div><span class="k">' + esc(item.q) + '</span>' +
-                  '<span class="v' + (claim.passed ? '' : ' bad') + '">' +
-                  esc(item.a || '（未填）') + '</span></div>';
-              }).join('') +
-              (claim.voucher ? '<div><span class="k">凭证码</span><span class="v">' +
-                esc(claim.voucher) + '</span></div>' : '') +
-            '</div>' +
-          '</div>';
-        }).join('');
-
-    ui.modal({
-      title: '收到的认领申请',
-      bodyHtml: body + '<p class="text-small text-muted mt-12">答错的同学如果确实了解物品特征，' +
-        '可以线下核对后直接联系他。</p>',
-      buttons: [{ text: '关闭', primary: true }]
-    });
+  /** 处理人工审核申请：处理完重新渲染列表，因为"待处理"计数会变。 */
+  function showAppeals(post) {
+    ui.appealsModal({ store: store, post: post, ownerId: myId, onDone: render });
   }
 
   // ---------------------------------------------------------------- 本地数据维护
@@ -231,7 +229,7 @@
     ui.modal({
       title: '导出数据',
       bodyHtml: '<p class="text-small text-muted" style="margin-bottom:10px">' +
-        '下面是全部数据（含隐藏特征答案），可以复制保存作为备份。共 ' +
+        '下面是全部数据（含每道验证题的正确答案），可以复制保存作为备份。共 ' +
         U.formatBytes(dump.length * 2) + '。</p>' +
         '<textarea class="textarea" readonly style="height:200px;font-size:12px">' +
         esc(dump) + '</textarea>',

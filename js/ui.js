@@ -369,6 +369,133 @@
     });
   };
 
+  // ================================================================ 发布者侧弹窗
+
+  /**
+   * 发布者查看收到的认领申请。
+   * 详情页和「我的发布」用的是同一个弹窗，改一处两处都变。
+   *
+   * @param {object} deps { store, post, ownerId }
+   */
+  ui.claimsModal = function (deps) {
+    var result = deps.store.listClaims(deps.post.id, deps.ownerId);
+    if (!result.ok) return ui.toast(result.message, 'error');
+
+    var body;
+    if (!result.claims.length) {
+      body = '<p class="text-muted">还没有人提交认领申请。</p>';
+    } else {
+      body = result.claims.map(function (claim) {
+        var answers = claim.answers.map(function (item) {
+          return '<div><span class="k">' + esc(item.stem) + '</span>' +
+            '<span class="v' + (item.correct ? '' : ' bad') + '">' +
+            esc(item.choiceText) + (item.correct ? ' ✓' : ' ✕') + '</span></div>';
+        }).join('');
+
+        return '<div class="claim-item">' +
+          '<div class="claim-head">' +
+            '<span class="chip ' + (claim.passed ? 'chip-ok' : 'chip-red') + '">' +
+              (claim.passed ? '验证通过' : '验证未通过') + '</span>' +
+            '<span class="claim-time">' + esc(U.formatRelative(claim.at)) + '</span>' +
+          '</div>' +
+          '<div class="claim-answers">' + answers +
+            (claim.voucher ? '<div><span class="k">凭证码</span><span class="v">' +
+              esc(claim.voucher) + '</span></div>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    return ui.modal({
+      title: '收到的认领申请',
+      bodyHtml: body +
+        '<p class="text-small text-muted mt-12">只有你能看到答对答错（认领者自己看不到错在哪题，' +
+        '免得他反复试探）。答满 3 次都没通过的同学会转成人工审核申请。</p>',
+      buttons: [{ text: '关闭', primary: true }]
+    });
+  };
+
+  /**
+   * 发布者处理人工审核申请（认领者 3 次全败后提交的申诉）。
+   * 同意之后，申诉人再看这条信息就能直接看到联系方式。
+   *
+   * @param {object} deps { store, post, ownerId, onDone }
+   */
+  ui.appealsModal = function (deps) {
+    var dialog = null;
+
+    function open() {
+      var result = deps.store.listAppeals(deps.post.id, deps.ownerId);
+      if (!result.ok) return ui.toast(result.message, 'error');
+
+      var body = !result.appeals.length
+        ? '<p class="text-muted">还没有人提交人工审核申请。</p>'
+        : result.appeals.map(function (appeal) {
+            var chip = appeal.decision === 'pending'
+              ? '<span class="chip chip-wait">待处理</span>'
+              : (appeal.decision === 'approved'
+                  ? '<span class="chip chip-ok">已同意交还</span>'
+                  : '<span class="chip chip-red">已驳回</span>');
+
+            return '<div class="claim-item">' +
+              '<div class="claim-head">' + chip +
+                '<span class="claim-time">' + esc(U.formatRelative(appeal.at)) + ' 提交</span>' +
+              '</div>' +
+              '<div class="claim-answers">' +
+                '<div><span class="k">称呼</span><span class="v">' + esc(appeal.name) + '</span></div>' +
+                '<div><span class="k">联系方式</span><span class="v">' + esc(appeal.contact) + '</span></div>' +
+                '<div><span class="k">他提供的细节</span><span class="v">' + esc(appeal.detail) + '</span></div>' +
+                (appeal.note
+                  ? '<div><span class="k">你的留言</span><span class="v">' + esc(appeal.note) + '</span></div>'
+                  : '') +
+              '</div>' +
+              (appeal.decision === 'pending'
+                ? '<div class="appeal-ops">' +
+                    '<input class="input" data-note="' + esc(appeal.id) + '" maxlength="100" ' +
+                      'placeholder="给对方的留言（选填，例如约在值班室见面）">' +
+                    '<div class="appeal-btns">' +
+                      '<button type="button" class="btn btn-ghost btn-sm" data-reject="' + esc(appeal.id) + '">驳回</button>' +
+                      '<button type="button" class="btn btn-primary btn-sm" data-approve="' + esc(appeal.id) + '">同意交还</button>' +
+                    '</div>' +
+                  '</div>'
+                : '') +
+            '</div>';
+          }).join('');
+
+      if (dialog) dialog.close();
+      dialog = ui.modal({
+        title: '人工审核申请',
+        bodyHtml: body +
+          '<p class="text-small text-muted mt-12">这些是答满 3 次都没通过、转而申请人工审核的同学。' +
+          '同意之后，对方再看这条信息就能直接看到你的联系方式，不用再答题；' +
+          '如果东西确实不是他的，选「驳回」并写一句理由。</p>',
+        buttons: [{ text: '关闭', primary: true }]
+      });
+
+      ui.qsa('[data-approve]', dialog.mask).forEach(function (button) {
+        button.addEventListener('click', function () { decide(button, 'approved'); });
+      });
+      ui.qsa('[data-reject]', dialog.mask).forEach(function (button) {
+        button.addEventListener('click', function () { decide(button, 'rejected'); });
+      });
+    }
+
+    function decide(button, decision) {
+      var appealId = button.getAttribute(decision === 'approved' ? 'data-approve' : 'data-reject');
+      var noteInput = ui.qs('[data-note="' + appealId + '"]', dialog.mask);
+      var done = deps.store.resolveAppeal(
+        deps.post.id, appealId, decision, noteInput ? noteInput.value : '', deps.ownerId);
+
+      if (!done.ok) return ui.toast(done.message, 'error');
+
+      ui.toast(decision === 'approved' ? '已同意交还，对方可以看到你的联系方式了' : '已驳回这次申诉', 'ok');
+      open();                                  // 重新拉一次数据，界面与存储保持一致
+      if (deps.onDone) deps.onDone();
+    }
+
+    open();
+  };
+
   // ================================================================ 表单错误提示
 
   /** 把 { 字段名: 中文提示 } 显示到表单对应位置，并返回第一个出错字段。 */

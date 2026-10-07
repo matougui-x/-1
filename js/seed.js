@@ -56,11 +56,23 @@
         updatedAt: created,
         views: data.views || 0,
         ownerId: data.ownerId || 'seed_owner_other',
-        hidden: data.hidden || [],
-        revealMode: 'contact',
+        questions: data.questions || [],
         claims: data.claims || [],
+        appeals: data.appeals || [],
         attemptsLeft: typeof data.attemptsLeft === 'number' ? data.attemptsLeft : LF.VERIFY.maxAttempts
       };
+    }
+
+    /* 出题小工具：让下面的演示数据一眼能看出"这题问的是什么、哪项是对的"。 */
+    function judge(stem, answer) {
+      return { type: 'judge', stem: stem, options: LF.JUDGE_OPTIONS.slice(), answer: answer };
+    }
+    function choice(stem, options, answer) {
+      return { type: 'choice', stem: stem, options: options, answer: answer };
+    }
+    /** 演示用的认领作答记录（发布者在「我的发布」里看到的样子）。 */
+    function answer(stem, choiceText, correct) {
+      return { id: 'a_' + stem.length, type: 'choice', stem: stem, choice: 0, choiceText: choiceText, correct: correct };
     }
 
     var list = [
@@ -80,25 +92,62 @@
         ownerId: me,
         created: ago(3 * HOUR),
         views: 86,
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '3882' },
-          { q: '卡面标记', a: '蓝色小熊贴纸' }
+        questions: [
+          judge('卡面上写的是「王小明」这个名字', 0),
+          judge('卡面贴着一张蓝色小熊贴纸', 0),
+          choice('卡号后四位是', ['3882', '1027', '5566', '9120'], 0),
+          choice('这张卡是哪个年级的', ['2023 级', '2022 级', '2024 级', '2021 级'], 0)
         ],
         claims: [
           {
             at: ago(2 * HOUR),
             passed: true,
             voucher: 'CL-2026-3882',
-            answers: [{ q: '卡面姓名', a: '王小明' }, { q: '卡号后四位', a: '3882' }]
+            answers: [
+              answer('卡面上写的是「王小明」这个名字', '正确', true),
+              answer('卡面贴着一张蓝色小熊贴纸', '正确', true),
+              answer('卡号后四位是', '3882', true),
+              answer('这张卡是哪个年级的', '2023 级', true)
+            ]
           },
           {
             at: ago(1.2 * HOUR),
             passed: false,
-            answers: [{ q: '卡面姓名', a: '李四' }, { q: '卡号后四位', a: '1234' }]
+            answers: [
+              answer('卡面上写的是「王小明」这个名字', '正确', true),
+              answer('卡面贴着一张蓝色小熊贴纸', '错误', false),
+              answer('卡号后四位是', '9120', false),
+              answer('这张卡是哪个年级的', '2023 级', true)
+            ]
+          },
+          {
+            at: ago(0.6 * HOUR),
+            passed: false,
+            answers: [
+              answer('卡面上写的是「王小明」这个名字', '错误', false),
+              answer('卡面贴着一张蓝色小熊贴纸', '错误', false),
+              answer('卡号后四位是', '5566', false),
+              answer('这张卡是哪个年级的', '2022 级', false)
+            ]
           }
         ],
-        attemptsLeft: 2
+        attemptsLeft: 0,
+        // 一条等待处理的申诉，用来演示 3 次全败之后的"人工审核通道"
+        appeals: [
+          {
+            id: 'seed_appeal_1',
+            claimantId: 'seed_owner_claimer',
+            name: '李思远',
+            contact: '微信：lisiyuan2022',
+            detail: '这张卡应该是我的：卡号后四位 3882，背面签名栏写的是我的名字，' +
+              '卡套里还夹着一张图书馆的借书凭条，日期是上周三。',
+            at: ago(0.5 * HOUR),
+            decision: 'pending',
+            note: '',
+            voucher: '',
+            decidedAt: null
+          }
+        ]
       }),
       post({
         id: 'seed_mine_2',
@@ -115,9 +164,10 @@
         ownerId: me,
         created: ago(1.5 * DAY),
         views: 53,
-        hidden: [
-          { q: '伞面颜色', a: '全黑，无花纹' },
-          { q: '伞柄特征', a: '弯柄，有一道划痕' }
+        questions: [
+          judge('伞面是纯黑色、没有花纹', 0),
+          choice('伞柄的样子是', ['弯柄', '直柄', '自动伸缩', '折叠短柄'], 0),
+          choice('伞面上最明显的特征是', ['一道划痕', '印着校徽', '挂着吊牌', '没有特征'], 0)
         ]
       }),
 
@@ -151,9 +201,10 @@
         contactWay: 'QQ：1187****52',
         created: ago(1 * DAY),
         views: 41,
-        hidden: [
-          { q: '伞面颜色', a: '浅粉色，有小碎花' },
-          { q: '伞柄特征', a: '直柄，挂着一个白色小圆珠' }
+        questions: [
+          judge('伞面是浅粉色的碎花图案', 0),
+          judge('伞柄上挂着一个白色小圆珠', 0),
+          choice('伞柄的样子是', ['直柄', '弯柄', '自动伸缩', '木柄'], 0)
         ]
       }),
       post({
@@ -189,16 +240,21 @@
         status: 'done',
         doneType: 'returned',
         doneAt: ago(4 * DAY),
-        hidden: [
-          { q: '卡面姓名', a: '孙浩' },
-          { q: '卡号后四位', a: '1027' }
+        questions: [
+          judge('卡面上写的是「孙浩」这个名字', 0),
+          choice('卡号后四位是', ['1027', '3882', '5566', '9120'], 0),
+          choice('一起捡到的学生证是哪一年的', ['2022 级', '2023 级', '2021 级', '2024 级'], 0)
         ],
         claims: [
           {
             at: ago(4.2 * DAY),
             passed: true,
             voucher: 'CL-2026-1027',
-            answers: [{ q: '卡面姓名', a: '孙浩' }, { q: '卡号后四位', a: '1027' }]
+            answers: [
+              answer('卡面上写的是「孙浩」这个名字', '正确', true),
+              answer('卡号后四位是', '1027', true),
+              answer('一起捡到的学生证是哪一年的', '2022 级', true)
+            ]
           }
         ]
       }),
@@ -231,10 +287,11 @@
         contactWay: '微信：sunhr2022',
         created: ago(4 * HOUR),
         views: 52,
-        hidden: [
-          { q: '扉页签名', a: '林小雨' },
-          { q: '笔记特征', a: '用绿色荧光笔标重点' },
-          { q: '书名', a: '高等数学上册' }
+        questions: [
+          judge('扉页上写的是「林小雨」这个名字', 0),
+          judge('书里的重点用绿色荧光笔标注过', 0),
+          choice('这本书是', ['《高等数学》上册', '《高等数学》下册', '《线性代数》', '《大学物理》'], 0),
+          choice('书里笔记最密的一章是', ['第一章', '第三章', '第五章', '第七章'], 0)
         ]
       }),
       post({
@@ -266,9 +323,10 @@
         contactWay: '微信：zhengym2022',
         created: ago(2 * DAY),
         views: 95,
-        hidden: [
-          { q: '颜色与款式', a: '黑色双肩包，有一个小的黄色挂饰' },
-          { q: '包内物品', a: '一台银色笔记本和一本蓝色活页本' }
+        questions: [
+          judge('包上挂着一个小黄色挂饰', 0),
+          choice('包的颜色和款式是', ['黑色双肩包', '灰色单肩包', '蓝色双肩包', '棕色帆布包'], 0),
+          choice('包里最显眼的物品是', ['一台银色笔记本电脑', '一本蓝色活页本', '一个水杯', '一副耳机'], 0)
         ]
       }),
       post({
@@ -321,9 +379,10 @@
         contactWay: '微信：qianyu2022',
         created: ago(12 * HOUR),
         views: 19,
-        hidden: [
-          { q: '杯身颜色', a: '深蓝色' },
-          { q: '杯身图案', a: '一张绿色社团贴纸，写着"青协"' }
+        questions: [
+          choice('杯子的主要颜色是', ['深蓝色', '黑色', '白色', '粉色'], 0),
+          judge('杯身上贴着一张社团贴纸', 0),
+          choice('贴纸上写的是', ['青协', '学生会', '辩论队', '摄影社'], 0)
         ]
       }),
       post({

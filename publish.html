@@ -45,7 +45,7 @@
           <label class="field-label" for="fCategory">物品分类<span class="req">*</span></label>
           <select class="select" id="fCategory" name="category"></select>
           <div class="field-error"></div>
-          <div class="field-hint">分类会影响隐藏特征的预设问题，建议先选分类再填下面的隐藏信息。</div>
+          <div class="field-hint">分类会影响「常用模板」里能直接插入的题目，建议先选分类再出题。</div>
         </div>
 
         <div class="field" data-field="area">
@@ -69,16 +69,8 @@
           <div class="field-error"></div>
         </div>
 
-        <div class="field" data-field="features">
-          <label class="field-label">公开特征<span class="req">*</span><span class="text-muted" style="font-weight:400">（至少填一项）</span></label>
-          <div id="publicFeatures"></div>
-          <div class="field-error"></div>
-          <div class="field-hint" id="publicHint"></div>
-          <div class="field-hint" id="publicWarn" style="color:var(--orange-d);font-weight:500" hidden></div>
-        </div>
-
         <div class="field" data-field="description">
-          <label class="field-label" for="fDesc">补充说明<span class="text-muted" style="font-weight:400">（选填）</span></label>
+          <label class="field-label" for="fDesc">物品描述<span class="text-muted" style="font-weight:400">（选填，公开展示）</span></label>
           <textarea class="textarea" id="fDesc" name="description" maxlength="300"
                     placeholder="补充一些细节，比如物品当时的状态、你捡到后放在哪里了。"></textarea>
           <div class="field-error"></div>
@@ -86,28 +78,37 @@
         </div>
       </div>
 
-      <!-- ============ 隐藏特征（仅招领） ============ -->
-      <div class="form-section is-locked" id="hiddenSection" hidden>
+      <!-- ============ 认领验证题（仅招领） ============ -->
+      <div class="form-section is-locked" id="quizSection" hidden>
         <div class="form-section-title">
-          <span>🔒 隐藏验证信息</span>
-          <span class="sub" style="margin-left:auto">不对外显示</span>
+          <span>🔒 认领验证题</span>
+          <span class="sub" style="margin-left:auto">只对答对的人开放联系方式</span>
         </div>
         <p class="field-hint" style="margin:0 0 14px">
-          系统按「物品分类」预设问题，你只需要填答案。答案不会出现在首页、搜索结果和详情页；
-          认领人答对后才能看到你的联系方式。这是防止冒领的关键，请填只有物主才知道的细节。
+          出题的人是你（拾得者）。题型只有<b>判断题</b>和<b>选择题</b>两种，请出 3–5 题（建议 4 题）。
+          认领者会一次性看到全部题目、一次答完，系统统一判定，答对全部题目才能看到你的联系方式；
+          他最多能答 3 次，3 次都没答对才允许提交申诉，由你人工判断。
         </p>
 
-        <div class="field" data-field="hidden">
-          <div id="hiddenQuestions"></div>
-          <div class="field-error"></div>
+        <div class="lockbox" id="legacyNotice" hidden>
+          <span class="ic">⚠️</span>
+          <span>这条信息是用旧版「隐藏特征」发布的，那套自由文本答案无法自动变成客观题，已停止使用。
+            <span class="lk">请在这里重新出 3–5 道题；在新题出好之前，这条信息不会向认领人要求验证。</span></span>
         </div>
 
-        <div class="field" style="margin-bottom:0">
-          <label class="field-label" for="fReveal">认领人答对后</label>
-          <select class="select" id="fReveal" name="revealMode">
-            <option value="contact">显示联系方式并生成认领凭证</option>
-            <option value="voucher">只生成认领凭证，联系方式由我另行告知</option>
-          </select>
+        <div class="quiz-toolbar">
+          <span class="quiz-count" id="quizCount"></span>
+          <span class="quiz-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="addJudgeBtn">＋ 添加判断题</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="addChoiceBtn">＋ 添加选择题</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="templateBtn">常用模板</button>
+          </span>
+        </div>
+
+        <div class="field" data-field="questions" style="margin-bottom:0">
+          <div id="questionList"></div>
+          <div class="field-error"></div>
+          <div class="field-hint" id="quizHint"></div>
         </div>
       </div>
 
@@ -120,7 +121,7 @@
           <div class="photo-grid" id="photoGrid"></div>
           <input type="file" id="photoInput" accept="image/*" multiple hidden>
           <div class="field-error"></div>
-          <div class="field-hint">照片会公开展示，请勿拍到学号、姓名等隐藏特征。图片会自动压缩后保存在本地。</div>
+          <div class="field-hint">照片会公开展示，请不要拍到学号、姓名等只有物主知道的细节。图片会自动压缩后保存在本地。</div>
         </div>
 
         <div class="field" data-field="contactName">
@@ -140,7 +141,7 @@
           <label class="field-label" for="fContactWay">联系方式<span class="req">*</span></label>
           <input class="input" id="fContactWay" name="contactWay" maxlength="60" placeholder="例如：微信：zhangmy2023">
           <div class="field-error"></div>
-          <div class="field-hint">建议填微信或 QQ，写清是哪种。招领信息设置了隐藏特征后，这里只对通过验证的人显示。</div>
+          <div class="field-hint">建议填微信或 QQ，写清是哪种。招领信息出了验证题之后，这里只对答对全部题目的人显示。</div>
         </div>
       </div>
 

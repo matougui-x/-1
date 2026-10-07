@@ -2,11 +2,16 @@
  * 发布 / 编辑页控制器
  *
  * 寻物和招领共用这一套表单，靠顶部的分段控件切换：
- *   - 切换类型只改文案（"拾取地点" ⇄ "丢失地点"）和是否显示隐藏特征区块；
- *   - 切换分类会重建隐藏特征的预设问题（证件卡片问卡号，雨伞问伞面颜色）。
+ *   - 切换类型只改文案（"拾取地点" ⇄ "丢失地点"）和是否显示验证题区块；
+ *   - 切换分类会影响「常用模板」里能直接插入的题目。
+ *
+ * ★ 认领验证题（第二版方案）：
+ *   出题的人是拾得者，题型只有判断题和选择题，一次出 3–5 题。
+ *   这里维护的 state.questions 是唯一数据源，DOM 只负责显示；
+ *   在输入框里打字只回写 state、不重建 DOM，否则每敲一个字都会丢焦点。
  *
  * 编辑模式复用同一个页面：带 ?id=xxx 进来时先读原记录回填，
- * 提交时走 store.update 而不是 store.create（数据的 id/发布时间/浏览量在数据层保证不变）。
+ * 提交时走 store.update 而不是 store.create（id/发布时间/浏览量在数据层保证不变）。
  */
 (function (root) {
   'use strict';
@@ -15,6 +20,7 @@
   var U = LF.utils;
   var ui = LF.ui;
   var esc = U.escapeHtml;
+  var V = LF.VERIFY;
 
   var app = ui.startPage({ nav: '', tabbar: false, welcome: false });
   var store = app.store;
@@ -22,109 +28,178 @@
 
   var form = ui.qs('#postForm');
   var editId = U.query('id');
-  var editing = null;
 
   /** 表单当前状态。照片单独存，因为它在 DOM 里是 dataURL 数组。 */
   var state = {
     type: 'found',
-    photos: []
+    photos: [],
+    questions: []
   };
 
-  // ---------------------------------------------------------------- 下拉选项初始化
+  var questionSeq = 0;
 
-  function initSelects() {
-    ui.qs('#fCategory').innerHTML = LF.CATEGORIES.map(function (category) {
-      return '<option value="' + esc(category.key) + '">' + category.icon + ' ' + esc(category.name) + '</option>';
-    }).join('');
+  // ---------------------------------------------------------------- 题型与题目
 
-    ui.qs('#fArea').innerHTML = LF.AREAS.map(function (area) {
-      return '<option value="' + esc(area.key) + '">' + area.icon + ' ' + esc(area.name) + '</option>';
-    }).join('');
+  /** 造一道空题。判断题的选项由系统固定，选择题先给两个空选项。 */
+  function blankQuestion(type) {
+    questionSeq++;
+    return {
+      id: 'q' + questionSeq,
+      type: type,
+      stem: '',
+      options: type === 'judge' ? LF.JUDGE_OPTIONS.slice() : ['', ''],
+      answer: 0
+    };
   }
 
-  /** 具体地点的候选词跟着区域变，减少手打错别字。 */
-  function refreshSpotList() {
-    var area = LF.areaOf(ui.qs('#fArea').value);
-    ui.qs('#spotList').innerHTML = area.spots.map(function (spot) {
-      return '<option value="' + esc(spot) + '"></option>';
-    }).join('');
-  }
-
-  // ---------------------------------------------------------------- 隐藏特征
-
-  /**
-   * 按当前分类重建隐藏特征的问题列表。
-   * 尽量保留已经填过的答案：切换分类时问题名可能变，能对上的就留着，
-   * 免得用户刚填完一半、改了个分类又得重填。
-   */
-  function renderHiddenQuestions(preserve) {
-    var categoryKey = ui.qs('#fCategory').value;
-    var presets = LF.presetsFor(categoryKey);
-    var previous = preserve || {};
-
-    ui.qs('#hiddenQuestions').innerHTML = presets.map(function (preset, index) {
-      var value = previous[preset.q] || '';
-      return '<div class="field" style="margin-bottom:12px" data-q="' + esc(preset.q) + '">' +
-        '<label class="field-label" style="font-weight:500">' +
-          '问题 ' + (index + 1) + ' · ' + esc(preset.q) + '</label>' +
-        '<input class="input" data-answer maxlength="20" ' +
-          'placeholder="' + esc(preset.ask) + '" value="' + esc(value) + '">' +
-        '</div>';
-    }).join('');
-
-    updateHiddenHint();
-  }
-
-  /** 实时提示"已填了几项"，比事后报错友好。 */
-  function updateHiddenHint() {
-    var filled = collectHidden().filter(function (item) { return item.a !== ''; }).length;
-    var hint = ui.qs('#hiddenSection .field[data-field="hidden"] .field-error');
-    var tips = ui.qs('#hiddenHint');
-    if (!tips) {
-      tips = ui.el('<div class="field-hint" id="hiddenHint"></div>');
-      ui.qs('#hiddenQuestions').parentNode.appendChild(tips);
+  function findQuestion(id) {
+    for (var i = 0; i < state.questions.length; i++) {
+      if (state.questions[i].id === id) return state.questions[i];
     }
-    var enough = filled >= LF.VERIFY.minHidden;
-    tips.textContent = '已填写 ' + filled + ' 项，至少需要 ' + LF.VERIFY.minHidden +
-      ' 项（最多 ' + LF.VERIFY.maxHidden + ' 项）。' +
-      (enough ? '可以发布了。' : '再填 ' + (LF.VERIFY.minHidden - filled) + ' 项。');
-    tips.style.color = enough ? 'var(--green-d)' : 'var(--ink-3)';
-    return hint;
+    return null;
   }
 
-  function collectHidden() {
-    return ui.qsa('#hiddenQuestions [data-q]').map(function (row) {
-      return {
-        q: row.getAttribute('data-q'),
-        a: U.clean(row.querySelector('[data-answer]').value)
-      };
+  function optionRowHtml(question, index, label) {
+    var checked = Number(question.answer) === index ? ' checked' : '';
+    var removable = question.type === 'choice' && question.options.length > V.minOptions;
+
+    return '<div class="quiz-opt" data-index="' + index + '">' +
+      '<label class="quiz-pick" title="把这一项设为正确答案">' +
+        '<input type="radio" name="ans_' + esc(question.id) + '" data-act="answer" value="' + index + '"' + checked + '>' +
+        '<span class="quiz-pick-dot"></span>' +
+      '</label>' +
+      '<input class="input quiz-opt-input" data-field="option" maxlength="' + V.optionMax + '" ' +
+        'value="' + esc(question.options[index]) + '" ' +
+        (question.type === 'judge' ? 'readonly ' : '') +
+        'placeholder="选项内容" aria-label="' + label + '">' +
+      (removable
+        ? '<button type="button" class="link-btn quiz-opt-remove" data-act="remove-option">删除</button>'
+        : '') +
+    '</div>';
+  }
+
+  function questionHtml(question, index) {
+    var isJudge = question.type === 'judge';
+    var label = isJudge ? LF.questionTypeOf('judge').name : LF.questionTypeOf('choice').name;
+
+    var options = question.options.map(function (option, optionIndex) {
+      return optionRowHtml(question, optionIndex, '第 ' + (index + 1) + ' 题选项 ' + (optionIndex + 1));
+    }).join('');
+
+    var addOption = (!isJudge && question.options.length < V.maxOptions)
+      ? '<button type="button" class="btn btn-ghost btn-sm quiz-add-opt" data-act="add-option">＋ 添加选项</button>'
+      : '';
+
+    return '<div class="quiz-card" data-qid="' + esc(question.id) + '">' +
+      '<div class="quiz-head">' +
+        '<span class="quiz-no">第 ' + (index + 1) + ' 题</span>' +
+        '<div class="segmented quiz-type" role="group" aria-label="第 ' + (index + 1) + ' 题的题型">' +
+          '<button type="button" data-act="type" data-type="judge"' +
+            (isJudge ? ' class="is-on"' : '') + '>判断题</button>' +
+          '<button type="button" data-act="type" data-type="choice"' +
+            (!isJudge ? ' class="is-on"' : '') + '>选择题</button>' +
+        '</div>' +
+        '<button type="button" class="link-btn quiz-remove" data-act="remove-question">删除本题</button>' +
+      '</div>' +
+
+      '<label class="field-label" for="stem_' + esc(question.id) + '">' + label + '题目<span class="req">*</span></label>' +
+      '<input class="input" id="stem_' + esc(question.id) + '" data-field="stem" maxlength="' + V.stemMax + '" ' +
+        'value="' + esc(question.stem) + '" placeholder="' +
+        (isJudge ? '例如：卡面上有贴纸、签名或其他人为做的标记' : '例如：卡号后四位是') + '">' +
+
+      '<div class="quiz-options">' +
+        '<div class="quiz-options-head">' +
+          '<span>选项</span>' +
+          '<span class="text-muted">' + (isJudge ? '判断题固定两个选项，选一个正确答案' : '点左边的圆点指定正确答案') + '</span>' +
+        '</div>' +
+        options +
+        addOption +
+      '</div>' +
+    '</div>';
+  }
+
+  /** 重建题目列表（只在增删题目、改题型、增删选项时调用）。 */
+  function renderQuestions() {
+    var list = ui.qs('#questionList');
+
+    if (!state.questions.length) {
+      list.innerHTML = '<div class="quiz-empty">还没有题目。' +
+        '点上面的「＋ 添加判断题 / ＋ 添加选择题」，或者用「常用模板」快速生成一题。</div>';
+      updateQuizHint();
+      return;
+    }
+
+    list.innerHTML = state.questions.map(questionHtml).join('');
+    updateQuizHint();
+  }
+
+  /** 实时提示题量与题型分布，比事后报错友好。 */
+  function updateQuizHint() {
+    var mix = LF.questionMix(state.questions);
+    ui.qs('#quizCount').textContent = '已出 ' + state.questions.length + ' 题' +
+      (state.questions.length ? '（判断 ' + mix.judge + ' · 选择 ' + mix.choice + '）' : '');
+
+    var hint = ui.qs('#quizHint');
+    var enough = state.questions.length >= V.minQuestions && state.questions.length <= V.maxQuestions;
+    var text;
+
+    if (state.questions.length < V.minQuestions) {
+      text = '还差 ' + (V.minQuestions - state.questions.length) + ' 题：至少 ' + V.minQuestions +
+        ' 题（建议 ' + V.suggestedQuestions + ' 题，最多 ' + V.maxQuestions + ' 题）。';
+    } else if (state.questions.length > V.maxQuestions) {
+      text = '题目太多了，最多 ' + V.maxQuestions + ' 题，请删掉 ' + (state.questions.length - V.maxQuestions) + ' 题。';
+    } else {
+      text = '题量合适。每道题都要指定正确答案，认领者答错时系统不会告诉他是哪一题错。';
+    }
+
+    hint.textContent = text;
+    hint.style.color = enough ? 'var(--green-d)' : 'var(--ink-3)';
+  }
+
+  // ---------------------------------------------------------------- 常用模板
+
+  function openTemplatePicker() {
+    var templates = LF.templatesFor(ui.qs('#fCategory').value);
+
+    var body = templates.map(function (template, index) {
+      var type = LF.questionTypeOf(template.type);
+      var options = template.type === 'judge'
+        ? (template.options || LF.JUDGE_OPTIONS)
+        : template.options;
+      return '<div class="tpl-item">' +
+        '<div class="tpl-main">' +
+          '<div class="tpl-stem"><span class="chip chip-lock">' + esc(type.name) + '</span>' + esc(template.stem) + '</div>' +
+          '<div class="tpl-options text-muted text-small">' + options.map(esc).join(' / ') + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-tpl="' + index + '">插入</button>' +
+      '</div>';
+    }).join('');
+
+    var dialog = ui.modal({
+      title: '常用模板（' + LF.categoryOf(ui.qs('#fCategory').value).name + '）',
+      bodyHtml: '<p class="text-small text-muted" style="margin-bottom:10px">' +
+        '模板只帮你写好题干和候选项，插入后请改成这件物品的实际情况，' +
+        '并点圆点指定正确答案——哪一项对，只有你知道。</p>' + body,
+      buttons: [{ text: '关闭', primary: true }]
     });
-  }
 
-  // ---------------------------------------------------------------- 类型切换
-
-  function isFound() {
-    return state.type === 'found';
-  }
-
-  function applyType() {
-    ui.qsa('#typeSeg button').forEach(function (btn) {
-      btn.classList.toggle('is-on', btn.getAttribute('data-type') === state.type);
+    ui.qsa('[data-tpl]', dialog.mask).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var template = templates[Number(btn.getAttribute('data-tpl'))];
+        state.questions.push({
+          id: 'q' + (++questionSeq),
+          type: template.type,
+          stem: template.stem,
+          options: template.type === 'judge'
+            ? LF.JUDGE_OPTIONS.slice()
+            : (template.options || ['', '']).slice(),
+          answer: 0
+        });
+        renderQuestions();
+        dialog.close();
+        ui.toast('已插入模板题目，记得改成正确答案', 'ok');
+      });
     });
-
-    var found = isFound();
-    ui.qs('#locationLabel').textContent = found ? '拾取地点' : '丢失地点';
-    ui.qs('#timeLabel').textContent = found ? '拾取时间' : '丢失时间';
-    ui.qs('#fLocation').placeholder = found
-      ? '例如：教学楼 A 栋 301 教室'
-      : '例如：图书馆三楼自习区';
-    ui.qs('#fDesc').placeholder = found
-      ? '补充一些细节，比如物品当时的状态、你捡到后放在哪里了。注意不要写出隐藏特征的答案。'
-      : '补充一些细节，比如物品的颜色、贴纸、磨损等特征，方便捡到的同学认出它。';
-
-    ui.qs('#hiddenSection').hidden = !found;
-    if (found && !ui.qs('#hiddenQuestions').children.length) renderHiddenQuestions();
-    if (found) updateHiddenHint();
   }
 
   // ---------------------------------------------------------------- 照片
@@ -203,8 +278,15 @@
       contactName: ui.qs('#fContactName').value,
       contactDept: ui.qs('#fContactDept').value,
       contactWay: ui.qs('#fContactWay').value,
-      revealMode: ui.qs('#fReveal').value,
-      hidden: isFound() ? collectHidden() : []
+      questions: isFound() ? state.questions.map(function (question) {
+        return {
+          id: question.id,
+          type: question.type,
+          stem: question.stem,
+          options: question.options.slice(),
+          answer: question.answer
+        };
+      }) : []
     };
   }
 
@@ -222,39 +304,173 @@
     ui.qs('#fContactName').value = post.contactName || '';
     ui.qs('#fContactDept').value = post.contactDept || '';
     ui.qs('#fContactWay').value = post.contactWay || '';
-    ui.qs('#fReveal').value = post.revealMode || 'contact';
 
     applyType();
 
-    // 回填隐藏特征的答案（公开视图里没有答案，所以编辑时向数据层单独取一次）
-    var raw = rawPostById(post.id);
-    if (raw && Array.isArray(raw.hidden) && raw.hidden.length) {
-      var answers = {};
-      raw.hidden.forEach(function (item) { answers[item.q] = item.a; });
-      renderHiddenQuestions(answers);
+    // 编辑时要向数据层单独要一次带答案的草稿：公开视图里没有 answer
+    var draft = store.getEditable(post.id, myId);
+    if (draft.ok && Array.isArray(draft.post.questions) && draft.post.questions.length) {
+      state.questions = draft.post.questions.map(function (question) {
+        return {
+          id: question.id || ('q' + (++questionSeq)),
+          type: question.type,
+          stem: question.stem,
+          options: question.type === 'judge'
+            ? LF.JUDGE_OPTIONS.slice()
+            : (question.options || []).slice(),
+          answer: Number(question.answer) >= 0 ? Number(question.answer) : 0
+        };
+      });
+      renderQuestions();
+    }
+
+    // 旧版信息：说明旧答案已停用，需要重新出题
+    if (post.legacyVerify) {
+      ui.qs('#legacyNotice').hidden = false;
+      if (!state.questions.length) renderQuestions();
     }
 
     renderPhotos();
     updateCounters();
   }
 
-  /** 编辑时取内部原始记录。只有发布者能拿到，数据层已经做了归属校验的场景在这里由页面保证。 */
-  function rawPostById(id) {
-    var dump = store.exportAll();
-    for (var i = 0; i < dump.posts.length; i++) {
-      if (dump.posts[i].id === id) {
-        var post = dump.posts[i];
-        // 编辑别人的信息没有意义，数据层也会在提交时拒绝
-        return post.ownerId === myId ? post : null;
-      }
-    }
-    return null;
-  }
-
   function updateCounters() {
     ui.qs('#titleCount').textContent = ui.qs('#fTitle').value.length;
     ui.qs('#descCount').textContent = ui.qs('#fDesc').value.length;
   }
+
+  // ---------------------------------------------------------------- 类型切换
+
+  function isFound() {
+    return state.type === 'found';
+  }
+
+  function applyType() {
+    ui.qsa('#typeSeg button').forEach(function (btn) {
+      btn.classList.toggle('is-on', btn.getAttribute('data-type') === state.type);
+    });
+
+    var found = isFound();
+    ui.qs('#locationLabel').textContent = found ? '拾取地点' : '丢失地点';
+    ui.qs('#timeLabel').textContent = found ? '拾取时间' : '丢失时间';
+    ui.qs('#fLocation').placeholder = found
+      ? '例如：教学楼 A 栋 301 教室'
+      : '例如：图书馆三楼自习区';
+    ui.qs('#fDesc').placeholder = found
+      ? '补充一些细节，比如物品当时的状态、你捡到后放在哪里了。注意不要写出验证题的答案。'
+      : '补充一些细节，比如物品的颜色、贴纸、磨损等特征，方便捡到的同学认出它。';
+
+    ui.qs('#quizSection').hidden = !found;
+    if (found && !ui.qs('#questionList').children.length) renderQuestions();
+    if (found) updateQuizHint();
+  }
+
+  // ---------------------------------------------------------------- 下拉选项初始化
+
+  function initSelects() {
+    ui.qs('#fCategory').innerHTML = LF.CATEGORIES.map(function (category) {
+      return '<option value="' + esc(category.key) + '">' + category.icon + ' ' + esc(category.name) + '</option>';
+    }).join('');
+
+    ui.qs('#fArea').innerHTML = LF.AREAS.map(function (area) {
+      return '<option value="' + esc(area.key) + '">' + area.icon + ' ' + esc(area.name) + '</option>';
+    }).join('');
+  }
+
+  /** 具体地点的候选词跟着区域变，减少手打错别字。 */
+  function refreshSpotList() {
+    var area = LF.areaOf(ui.qs('#fArea').value);
+    ui.qs('#spotList').innerHTML = area.spots.map(function (spot) {
+      return '<option value="' + esc(spot) + '"></option>';
+    }).join('');
+  }
+
+  // ---------------------------------------------------------------- 题目编辑事件
+
+  /** 选项输入框、题干输入框：只回写 state，不重建 DOM（否则输入时丢焦点）。 */
+  ui.qs('#questionList').addEventListener('input', function (event) {
+    var card = event.target.closest('.quiz-card');
+    if (!card) return;
+    var question = findQuestion(card.getAttribute('data-qid'));
+    if (!question) return;
+
+    var field = event.target.getAttribute('data-field');
+    if (field === 'stem') {
+      question.stem = event.target.value;
+    } else if (field === 'option') {
+      var row = event.target.closest('.quiz-opt');
+      question.options[Number(row.getAttribute('data-index'))] = event.target.value;
+    }
+    updateQuizHint();
+  });
+
+  /** 单选题干、选项、题型切换、增删题：统一走点击委托。 */
+  ui.qs('#questionList').addEventListener('click', function (event) {
+    var btn = event.target.closest('[data-act]');
+    if (!btn) return;
+
+    var action = btn.getAttribute('data-act');
+    if (action === 'answer') {          // radio 由 change 处理，这里只兜住点击
+      return;
+    }
+
+    var card = btn.closest('.quiz-card');
+    var question = card ? findQuestion(card.getAttribute('data-qid')) : null;
+    if (!question) return;
+
+    if (action === 'remove-question') {
+      state.questions = state.questions.filter(function (item) { return item.id !== question.id; });
+      renderQuestions();
+      return;
+    }
+
+    if (action === 'type') {
+      var type = btn.getAttribute('data-type');
+      if (type === question.type) return;
+      question.type = type;
+      // 换题型等于换一套选项：判断题固定两项，选择题回到两个空选项
+      question.options = type === 'judge' ? LF.JUDGE_OPTIONS.slice() : [question.options[0] || '', ''];
+      question.answer = 0;
+      renderQuestions();
+      return;
+    }
+
+    if (action === 'add-option') {
+      question.options.push('');
+      renderQuestions();
+      return;
+    }
+
+    if (action === 'remove-option') {
+      var row = btn.closest('.quiz-opt');
+      var index = Number(row.getAttribute('data-index'));
+      question.options.splice(index, 1);
+      if (question.answer === index) question.answer = 0;
+      else if (question.answer > index) question.answer--;
+      renderQuestions();
+    }
+  });
+
+  /** 指定正确答案。 */
+  ui.qs('#questionList').addEventListener('change', function (event) {
+    if (event.target.getAttribute('data-act') !== 'answer') return;
+    var card = event.target.closest('.quiz-card');
+    var question = findQuestion(card.getAttribute('data-qid'));
+    if (!question) return;
+    question.answer = Number(event.target.value);
+  });
+
+  ui.qs('#addJudgeBtn').addEventListener('click', function () {
+    state.questions.push(blankQuestion('judge'));
+    renderQuestions();
+  });
+
+  ui.qs('#addChoiceBtn').addEventListener('click', function () {
+    state.questions.push(blankQuestion('choice'));
+    renderQuestions();
+  });
+
+  ui.qs('#templateBtn').addEventListener('click', openTemplatePicker);
 
   // ---------------------------------------------------------------- 提交
 
@@ -273,7 +489,7 @@
     if (!check.ok) {
       ui.showFieldErrors(form, check.errors);
       ui.showFormAlert(form, '还有 ' + Object.keys(check.errors).length + ' 处需要修改，请检查标红的字段。');
-      if (check.errors.hidden) ui.toast(check.errors.hidden, 'error');
+      if (check.errors.questions) ui.toast(check.errors.questions, 'error');
       return;
     }
 
@@ -290,7 +506,7 @@
       var errors = result.errors || {};
       ui.showFieldErrors(form, errors);
       if (errors._) ui.showFormAlert(form, errors._);
-      ui.toast(errors._ || '保存失败，请检查表单', 'error');
+      ui.toast(errors._ || errors.questions || '保存失败，请检查表单', 'error');
       return;
     }
 
@@ -307,19 +523,9 @@
     applyType();
   });
 
-  ui.qs('#fCategory').addEventListener('change', function () {
-    // 换分类时把已填的答案带过去，能对上的问题不用重填
-    var previous = {};
-    collectHidden().forEach(function (item) { previous[item.q] = item.a; });
-    renderHiddenQuestions(previous);
-  });
-
   ui.qs('#fArea').addEventListener('change', refreshSpotList);
   ui.qs('#fTitle').addEventListener('input', updateCounters);
   ui.qs('#fDesc').addEventListener('input', updateCounters);
-
-  // 隐藏特征答案变化时更新"已填几项"的提示
-  ui.qs('#hiddenQuestions').addEventListener('input', updateHiddenHint);
 
   // 用户开始修改某个字段就把它上面的红色报错清掉，避免一直红着
   form.addEventListener('input', function (event) {
@@ -383,7 +589,6 @@
       return;
     }
 
-    editing = existing;
     ui.qs('#barTitle').textContent = '编辑信息';
     root.document.title = '编辑信息 · 校园失物招领';
     ui.qs('#submitBtn').textContent = '保存修改';
@@ -392,10 +597,14 @@
   } else {
     ui.qs('#fCategory').value = 'card';
     applyType();
-    renderHiddenQuestions();
+    renderQuestions();
     renderPhotos();
   }
 
   updateCounters();
-  ui.markReady({ page: 'publish', mode: editId ? 'edit' : 'new' });
+  ui.markReady({
+    page: 'publish',
+    mode: editId ? 'edit' : 'new',
+    questions: state.questions.length
+  });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -111,13 +111,22 @@
 
   function lockboxHtml(post) {
     if (!post.needVerify) return '';
+    var mix = post.questionMix;
     return '<div class="lockbox mt-12">' +
       '<span class="ic">🔒</span>' +
-      '<span>发布者已隐藏 <b>' + post.hiddenCount + ' 项关键特征</b>：' +
-      esc(post.hiddenLabels.join('、')) + '。' +
-      '<span class="lk">认领时需回答其中 ' + Math.min(LF.VERIFY.pickCount, post.hiddenCount) +
-      ' 项，全部正确才会显示发布者的联系方式并生成认领凭证。</span></span>' +
+      '<span>发布者出了 <b>' + post.questionCount + ' 道认领验证题</b>（判断题 ' + mix.judge +
+      ' 道 · 选择题 ' + mix.choice + ' 道）。' +
+      '<span class="lk">认领人需要一次性答完全部题目，全部答对才会显示发布者的联系方式并生成认领凭证；' +
+      '最多答 ' + LF.VERIFY.maxAttempts + ' 次，3 次都没答对可以提交申诉走人工审核。</span></span>' +
       '</div>';
+  }
+
+  /** 旧版信息：隐藏特征已经停用，提醒发布者重新出题。 */
+  function legacyNoticeHtml(post) {
+    if (!post.legacyVerify || !post.isOwner) return '';
+    return '<div class="lockbox mt-12"><span class="ic">⚠️</span>' +
+      '<span>这条信息是用旧版「隐藏特征」发布的（旧答案已停止使用）。' +
+      '<span class="lk">点下面的「编辑」重新出 3–5 道判断题 / 选择题，认领验证才会重新生效。</span></span></div>';
   }
 
   function render(post) {
@@ -125,8 +134,8 @@
     root.document.title = post.title + ' · 校园失物招领';
 
     var safetyText = post.locked
-      ? '🔒 请先核对物品特征再申请认领；连续 ' + LF.VERIFY.maxAttempts +
-        ' 次未通过后，可以申请人工核对，由发布者判断。'
+      ? '🔒 请先核对物品特征再作答；连续 ' + LF.VERIFY.maxAttempts +
+        ' 次未通过后，可以提交申诉，由发布者人工判断。'
       : '🔒 请先核对物品特征再交接；建议约在图书馆、宿舍楼下等公共场所见面，不要提前转账。';
 
     contentEl.innerHTML =
@@ -151,6 +160,7 @@
           '</div>'
         : '') +
       '<div class="safe-tip mt-12"><span>🔒</span><span>' + esc(safetyText) + '</span></div>' +
+      legacyNoticeHtml(post) +
       (post.isOwner && U.isStale(post.createdAt)
         ? '<div class="lockbox mt-12"><span class="ic">⏰</span><span>这条信息发布了 ' +
           '较长时间还没有结束，如果东西已经找到，记得回来把它标记为已完成，' +
@@ -178,7 +188,7 @@
     return node;
   }
 
-  /** 发布者视角：维护状态、编辑、删除、看认领申请。 */
+  /** 发布者视角：维护状态、编辑、删除、看认领申请与人工审核申请。 */
   function renderOwnerActions(post) {
     actionBar.innerHTML = '';
     actionBar.appendChild(btn('编辑', 'btn-ghost', function () {
@@ -189,6 +199,14 @@
       actionBar.appendChild(btn('认领申请 ' + post.claimCount, 'btn-ghost', function () {
         showClaims(post);
       }));
+    }
+
+    if (post.appealCount > 0) {
+      actionBar.appendChild(btn(
+        post.appealPending > 0 ? '人工审核 ' + post.appealPending + ' 待处理' : '人工审核 ' + post.appealCount,
+        'btn-ghost',
+        function () { showAppeals(post); }
+      ));
     }
 
     if (post.status === 'open') {
@@ -206,7 +224,7 @@
     }
   }
 
-  /** 访客视角：需要验证的引导去认领，不需要验证的直接给联系方式。 */
+  /** 访客视角：需要验证的引导去答题；3 次用完的引导去申诉；不需要验证的直接给联系方式。 */
   function renderVisitorActions(post) {
     actionBar.innerHTML = '';
 
@@ -214,6 +232,20 @@
       actionBar.appendChild(btn('暂不认领', 'btn-ghost', function () {
         root.history.length > 1 ? root.history.back() : U.go('index');
       }));
+
+      // 3 次作答机会已经用完：主按钮从"我要认领"换成申诉入口
+      if (post.canAppeal) {
+        var appealText = (post.myAppeal && post.myAppeal.decision === 'pending')
+          ? '📮 查看我的申诉'
+          : (post.myAppeal && post.myAppeal.decision === 'rejected'
+              ? '📮 申诉情况'
+              : '📮 提交申诉（人工审核）');
+        actionBar.appendChild(btn(appealText, 'btn-primary', function () {
+          U.go('appeal', { id: post.id });
+        }));
+        return;
+      }
+
       actionBar.appendChild(btn('🔒 我要认领（需验证）', 'btn-primary', function () {
         U.go('verify', { id: post.id });
       }));
@@ -245,41 +277,14 @@
     });
   }
 
-  /** 发布者查看收到的认领申请（含答错的记录，便于判断是否要给人工核对机会）。 */
+  /** 发布者查看收到的认领申请（含答错的记录，便于判断是否要给人工审核机会）。 */
   function showClaims(post) {
-    var result = store.listClaims(post.id, myId);
-    if (!result.ok) return ui.toast(result.message, 'error');
+    ui.claimsModal({ store: store, post: post, ownerId: myId });
+  }
 
-    var body;
-    if (!result.claims.length) {
-      body = '<p class="text-muted">还没有人提交认领申请。</p>';
-    } else {
-      body = result.claims.map(function (claim) {
-        var answers = claim.answers.map(function (item) {
-          return '<div><span class="k">' + esc(item.q) + '</span>' +
-            '<span class="v' + (claim.passed ? '' : ' bad') + '">' + esc(item.a || '（未填）') + '</span></div>';
-        }).join('');
-        return '<div class="claim-item">' +
-          '<div class="claim-head">' +
-            '<span class="chip ' + (claim.passed ? 'chip-ok' : 'chip-red') + '">' +
-              (claim.passed ? '验证通过' : '验证未通过') + '</span>' +
-            '<span class="claim-time">' + esc(U.formatRelative(claim.at)) + '</span>' +
-          '</div>' +
-          '<div class="claim-answers">' + answers +
-            (claim.voucher ? '<div><span class="k">凭证码</span><span class="v">' +
-              esc(claim.voucher) + '</span></div>' : '') +
-          '</div>' +
-        '</div>';
-      }).join('');
-    }
-
-    ui.modal({
-      title: '收到的认领申请',
-      bodyHtml: body +
-        '<p class="text-small text-muted mt-12">答错的同学如果确实了解物品特征，' +
-        '可以在线下核对后直接联系他。</p>',
-      buttons: [{ text: '关闭', primary: true }]
-    });
+  /** 发布者处理人工审核申请；处理完刷新本页（底部按钮计数要跟着变）。 */
+  function showAppeals(post) {
+    ui.appealsModal({ store: store, post: post, ownerId: myId, onDone: refresh });
   }
 
   // ---------------------------------------------------------------- 数据刷新

@@ -19,19 +19,20 @@ describe('发布表单校验 validatePost', function () {
       assert.deepEqual(result.errors, {});
     });
 
-    it('寻物信息不设置隐藏特征也应当通过校验', function () {
+    it('寻物信息不出验证题也应当通过校验', function () {
       var result = LF.validatePost(T.validLost(), opts);
       assert.isTrue(result.ok, '应当通过，实际报错：' + JSON.stringify(result.errors));
     });
 
-    it('隐藏特征答案两侧的空格会被自动清理后再判断', function () {
+    it('题干两侧的空格会被自动清理后再判断', function () {
       var result = LF.validatePost(T.validFound({
-        hidden: [
-          { q: '卡面姓名', a: '  王小明  ' },
-          { q: '卡号后四位', a: ' 3882 ' }
+        questions: [
+          { type: 'judge', stem: '  卡面上写的是王小明  ', answer: 0 },
+          { type: 'judge', stem: '  卡面上贴着蓝色贴纸  ', answer: 0 },
+          { type: 'choice', stem: '  卡号后四位是  ', options: ['  3882  ', ' 1027 '], answer: 0 }
         ]
       }), opts);
-      assert.isTrue(result.ok);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
     });
   });
 
@@ -136,59 +137,156 @@ describe('发布表单校验 validatePost', function () {
     });
   });
 
-  describe('隐藏特征（防冒领的关键输入）', function () {
-    it('招领信息只填 1 项隐藏特征时被拒绝', function () {
+  describe('认领验证题（防冒领的关键输入）', function () {
+    /** 拼一份题干合法的题，只改我们关心的那一处。 */
+    function q(overrides) {
+      return T.merge({
+        type: 'judge', stem: '卡面上写的是王小明的名字', options: ['正确', '错误'], answer: 0
+      }, overrides);
+    }
+
+    it('招领信息只有 2 道题时被拒绝（下边界）', function () {
       var result = LF.validatePost(T.validFound({
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '' }
+        questions: [q(), q({ stem: '卡面贴着蓝色小熊贴纸' })]
+      }), opts);
+      assert.property(result.errors, 'questions');
+      assert.match(result.errors.questions, /至少出 3 道/);
+    });
+
+    it('正好 3 道题时通过（下边界内侧）', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [q(), q({ stem: '卡面贴着蓝色小熊贴纸' }), q({ stem: '卡号后四位是 3882' })]
+      }), opts);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+    });
+
+    it('正好 5 道题时通过（上边界内侧）', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [q(), q({ stem: '卡面贴着蓝色小熊贴纸' }), q({ stem: '卡号后四位是 3882' }),
+          q({ stem: '卡面是 2023 级的新版卡' }), q({ stem: '卡套是透明的' })]
+      }), opts);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+    });
+
+    it('6 道题时被拒绝（上边界）', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [q(), q({ stem: '卡面贴着蓝色小熊贴纸' }), q({ stem: '卡号后四位是 3882' }),
+          q({ stem: '卡面是 2023 级的新版卡' }), q({ stem: '卡套是透明的' }), q({ stem: '卡里有借书凭条' })]
+      }), opts);
+      assert.property(result.errors, 'questions');
+      assert.match(result.errors.questions, /最多只能出 5 道/);
+    });
+
+    it('一道题都没出时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({ questions: [] }), opts);
+      assert.property(result.errors, 'questions');
+    });
+
+    it('题干太短时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [q({ stem: '卡' }), q({ stem: '卡面贴着蓝色小熊贴纸' }), q({ stem: '卡号后四位是 3882' })]
+      }), opts);
+      assert.match(result.errors.questions, /第 1 题的题目太短/);
+    });
+
+    it('题干超过 60 个字时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          q({ stem: new Array(63).join('题') }),
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
         ]
       }), opts);
-      assert.property(result.errors, 'hidden');
+      assert.match(result.errors.questions, /不能超过 60 个字/);
     });
 
-    it('招领信息一项都没填时被拒绝', function () {
-      var result = LF.validatePost(T.validFound({ hidden: [] }), opts);
-      assert.property(result.errors, 'hidden');
-    });
-
-    it('单条答案超过 20 个字时被拒绝', function () {
+    it('没有指定正确答案时被拒绝', function () {
       var result = LF.validatePost(T.validFound({
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: new Array(23).join('长') }
+        questions: [
+          { type: 'choice', stem: '卡号后四位是', options: ['3882', '1027'], answer: -1 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
         ]
       }), opts);
-      assert.match(result.errors.hidden, /不能超过/);
+      assert.match(result.errors.questions, /还没有指定正确答案/);
     });
 
-    it('寻物信息填了隐藏特征也不会报错（该字段对寻物不生效）', function () {
-      var result = LF.validatePost(T.validLost({
-        hidden: [{ q: '卡面姓名', a: '王小明' }]
-      }), opts);
-      assert.isTrue(result.ok);
-    });
-
-    it('问题名为空的那一项会被忽略，不计入有效特征数', function () {
+    it('判断题不指定答案时默认按「正确」处理，不会报错', function () {
       var result = LF.validatePost(T.validFound({
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '3882' },
-          { q: '   ', a: '会被忽略' }
+        questions: [
+          { type: 'judge', stem: '卡面上写的是王小明的名字', answer: -1 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
         ]
       }), opts);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+    });
+
+    it('选择题只有一个选项时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          { type: 'choice', stem: '卡号后四位是', options: ['3882'], answer: 0 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
+        ]
+      }), opts);
+      assert.match(result.errors.questions, /至少要有 2 个选项/);
+    });
+
+    it('选择题选项超过 4 个时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          { type: 'choice', stem: '卡号后四位是', options: ['1', '2', '3', '4', '5'], answer: 0 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
+        ]
+      }), opts);
+      assert.match(result.errors.questions, /最多只能有 4 个选项/);
+    });
+
+    it('选项重复时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          { type: 'choice', stem: '卡号后四位是', options: ['3882', '3882'], answer: 0 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
+        ]
+      }), opts);
+      assert.match(result.errors.questions, /重复的选项/);
+    });
+
+    it('选项太长时被拒绝', function () {
+      var result = LF.validatePost(T.validFound({
+        questions: [
+          { type: 'choice', stem: '卡号后四位是', options: [new Array(20).join('长'), '1027'], answer: 0 },
+          q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          q({ stem: '卡号后四位是 3882' })
+        ]
+      }), opts);
+      assert.match(result.errors.questions, /选项太长/);
+    });
+
+    it('题型只有判断题和选择题，别的题型会被丢掉', function () {
+      var store = T.makeStore();
+      var result = store.create(T.validFound({
+        questions: [
+          q(), q({ stem: '卡面贴着蓝色小熊贴纸' }),
+          { type: 'essay', stem: '请描述这件物品', answer: 0 }
+        ]
+      }), 'u1');
+      assert.isFalse(result.ok);
+      assert.match(result.errors.questions, /至少出 3 道/);
+    });
+
+    it('寻物信息填了验证题也不会报错（该字段对寻物不生效）', function () {
+      var result = LF.validatePost(T.validLost({ questions: [q()] }), opts);
       assert.isTrue(result.ok);
 
       var store = T.makeStore();
-      var created = store.create(T.validFound({
-        hidden: [
-          { q: '卡面姓名', a: '王小明' },
-          { q: '卡号后四位', a: '3882' },
-          { q: '   ', a: '会被忽略' }
-        ]
-      }), 'u1');
+      var created = store.create(T.validLost({ questions: [q()] }), 'u1');
       assert.isTrue(created.ok);
-      assert.strictEqual(created.post.hiddenCount, 2, '空问题名不应被算作一隐藏项');
+      assert.strictEqual(created.post.questionCount, 0, '寻物信息不该携带验证题');
+      assert.isFalse(created.post.needVerify);
     });
   });
 
@@ -205,7 +303,7 @@ describe('发布表单校验 validatePost', function () {
         contactWay: ''
       }, opts);
       assert.isFalse(result.ok);
-      ['title', 'category', 'area', 'location', 'happenedAt', 'contactName', 'contactWay', 'hidden']
+      ['title', 'category', 'area', 'location', 'happenedAt', 'contactName', 'contactWay', 'questions']
         .forEach(function (field) {
           assert.property(result.errors, field, '应当报出 ' + field);
         });
