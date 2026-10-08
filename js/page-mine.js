@@ -57,7 +57,17 @@
         '<span class="lk">点「编辑」重新出 3–5 道判断题 / 选择题，认领验证就会重新生效。</span></span></div>';
     }
 
-    if (!post.needVerify) return '';
+    if (!post.needVerify) {
+      // 「其他」类招领不出题：联系方式直接公开。这里说一句，
+      // 免得发布者以为是出题没保存上（代价也一并讲清楚，见 store.js 的 LF.allowVerifyFor）。
+      if (post.type === 'found' && !LF.allowVerifyFor(post.category)) {
+        return '<div class="lockbox" style="margin-bottom:11px"><span class="ic">🤝</span>' +
+          '<span>这一类不设认领验证题（信任原则）：描述和照片直接公开，联系方式也直接可见。' +
+          '<span class="lk">代价是没有防冒领的闸门，交接前记得让对方说一说只有物主知道的细节。</span>' +
+          '</span></div>';
+      }
+      return '';
+    }
 
     var text = '验证题 ' + post.questionCount + ' 道（判断题 ' + post.questionMix.judge +
       ' · 选择题 ' + post.questionMix.choice + '）｜ 收到认领申请 ' + post.claimCount + ' 次';

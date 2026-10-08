@@ -9,7 +9,7 @@
   var LF = (root.LF = root.LF || {});
 
   /** 数据版本号，改变数据结构时递增，用于旧数据迁移（见 store.js 的 migratePost）。 */
-  LF.DATA_VERSION = 3;
+  LF.DATA_VERSION = 4;
 
   /** 本地存储键名。加前缀避免与同源下其它页面冲突。 */
   LF.KEYS = {
@@ -28,17 +28,32 @@
     { key: 'found', name: '招领', full: '招领（我捡到了东西）', tag: 'found' }
   ];
 
-  /** 物品分类，icon 同时作为没有照片时的缩略图。 */
+  /**
+   * 物品分类，icon 同时作为没有照片时的缩略图。
+   *
+   * ★ searchHint 是给**失主**看的引导语，首页选中分类时显示。
+   *
+   * 为什么要专门写这句话：分类的公开特征被 LF.FEATURES 锁死之后，
+   * 一条信息能"搜得到"的内容只剩标题、地点和那一两个特征。可失主不知道，
+   * 他还是会搜「蓝色充电宝」这种描述里才有的词，结果是 0 条——而
+   * "0 条结果"和"没人捡到"在页面上长得一模一样，他会直接得出错误的结论。
+   * 所以每个分类都要明说"这里能搜什么、什么搜不到"。
+   *
+   * 不变的规矩：只要某个分类在 LF.FEATURES 里定义了特征，它就**必须**有 searchHint；
+   * 兜底的「其他」也有，但它讲的是另一件事——那一类没有可锁的特征、也不出验证题，
+   * 所以引导失主"翻列表、按地点找、直接联系发布者"（信任原则，见 store.js 的 LF.allowVerifyFor）。
+   * test/specs/validate.spec.js 有两条用例替我们守着这两半规矩。
+   */
   LF.CATEGORIES = [
-    { key: 'card', name: '证件卡片', icon: '💳' },
-    { key: 'headphone', name: '耳机', icon: '🎧' },
-    { key: 'umbrella', name: '雨伞', icon: '☂️' },
-    { key: 'cup', name: '水杯', icon: '🥤' },
-    { key: 'electronics', name: '电子产品', icon: '📱' },
-    { key: 'bag', name: '包与书包', icon: '🎒' },
-    { key: 'clothing', name: '衣物配饰', icon: '🧥' },
-    { key: 'glasses', name: '眼镜', icon: '👓' },
-    { key: 'other', name: '其他', icon: '📦' }
+    { key: 'card', name: '证件卡片', icon: '💳', searchHint: '本类只公开卡号：请按证件号搜索（记不全的位用 * 顶位，位数要和卡号一样长），姓名、院系、卡号之外的细节都不公开。' },
+    { key: 'headphone', name: '耳机', icon: '🎧', searchHint: '本类只公开品牌和颜色：请按品牌或颜色搜索，充电盒、外观磨损这类细节不公开。' },
+    { key: 'umbrella', name: '雨伞', icon: '☂️', searchHint: '本类只公开伞面颜色和柄型：请按颜色或柄型搜索，图案、划痕这类细节不公开。' },
+    { key: 'cup', name: '水杯', icon: '🥤', searchHint: '本类只公开颜色和材质：请按颜色或材质搜索，贴纸、图案这类细节不公开。' },
+    { key: 'electronics', name: '电子产品', icon: '📱', searchHint: '本类只公开品牌和型号：请按品牌或型号搜索，颜色、外观、保护壳都不在公开信息里。' },
+    { key: 'bag', name: '包与书包', icon: '🎒', searchHint: '本类只公开类型和颜色：请按类型或颜色搜索，包里的东西、挂饰这类细节不公开。' },
+    { key: 'clothing', name: '衣物配饰', icon: '🧥', searchHint: '本类只公开类型和颜色：请按类型或颜色搜索，尺码、污渍、记号这类细节不公开。' },
+    { key: 'glasses', name: '眼镜', icon: '👓', searchHint: '本类只公开镜框材质和镜框颜色：请按材质或颜色搜索，镜片、镜腿上的细节不公开。' },
+    { key: 'other', name: '其他', icon: '📦', searchHint: '这一类不好指定公开特征，也不出认证题：发布者会把描述和照片直接公开，请翻列表（或用描述里的词、按地点）找，翻到了直接联系发布者核对。' }
   ];
 
   /**
@@ -65,6 +80,9 @@
    *
    * ⚠️ 改这个字典时记得同步三处：seed.js 的演示数据、test/specs 的夹具、
    *    README 与博客里的出题规则表。
+   *    再加一处：LF.CATEGORIES 里每个分类的 searchHint（首页给失主的"请搜什么"引导，
+   *    见 LF.searchHintFor）。字段名改了而引导语照旧，失主就会照着错的提示去搜——
+   *    test/specs/validate.spec.js 有一条用例专门守这个。
    *
    * other 刻意不定义：它在发布页保留自由描述框，是唯一的兜底分类。
    */
@@ -304,6 +322,50 @@
   /** 某个分类的特征键列表，数据层清洗 features 对象时用。 */
   LF.featureKeysFor = function (categoryKey) {
     return LF.featuresFor(categoryKey).map(function (item) { return item.key; });
+  };
+
+  /** 某个分类的公开特征名，顿号分隔；搜索引导语直接引用字典，不另抄一份。 */
+  LF.featureNamesFor = function (categoryKey) {
+    return LF.featuresFor(categoryKey).map(function (item) { return item.name; }).join('、');
+  };
+
+  /**
+   * 有公开特征的分类才有的收尾句："这一两项就是全部可搜内容"。
+   *
+   * 写上它是因为光说"请搜品牌"不够——失主得知道"除了这一两项，别的都搜不到"，
+   * 才不会拿描述里的词去试。
+   */
+  LF.SEARCH_HINT_SUFFIX = '（就是全部可搜的公开特征）';
+
+  /**
+   * 某个分类给失主看的搜索引导语，首页选中分类时显示。
+   *
+   * 正文一律来自 LF.CATEGORIES 的 searchHint（见那里的说明），这个函数只负责补两件事：
+   *   1. 有公开特征的分类补一句"这一两项就是全部可搜内容"，免得引导语和字典各说各话；
+   *      顺带在字典改了、引导语忘了改时把真实字段名追加在后面自曝其短，
+   *      而不是让失主照着一条过时的提示搜；
+   *   2. 没有公开特征的分类（「其他」）把话讲清楚：别按特征找，翻列表、按地点找。
+   *
+   * ★ 没写 searchHint 的分类返回空串，页面据此不显示。**不要在代码里编一句默认文案**——
+   *   那样脏数据里的未知分类会凭空冒出一条引导，config.js 这个唯一数据源就废了。
+   *
+   * ★ 「其他」也会返回字符串——它不是"没有引导的例外"，而是**对照组**：
+   *   别的分类是"锁定特征 + 出题验证"，它是"描述和照片直接公开、不出题"（信任原则）。
+   *   流程完全不同，所以引导语也必须不一样。
+   */
+  LF.searchHintFor = function (categoryKey) {
+    var category = LF.findBy(LF.CATEGORIES, categoryKey);
+    if (!category) return '';                       // 未知分类：没有引导，也别编
+
+    var text = LF.utils.clean(category.searchHint);
+    if (!text) return '';                           // 新加的分类忘了写 searchHint
+
+    var keys = LF.featureKeysFor(categoryKey);
+    if (!keys.length) return '🔍 ' + text;
+
+    var names = LF.featureNamesFor(categoryKey);
+    if (text.indexOf(names) === -1) text = text + '（' + names + '）';
+    return '🔍 ' + text + LF.SEARCH_HINT_SUFFIX;
   };
 
   /** 按分类 + 特征键取单条定义，找不到返回 null。 */

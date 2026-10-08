@@ -49,6 +49,8 @@
         </div>
         <!-- 公开特征筛选：只在选中了具体分类、且该分类有特征定义时才有内容 -->
         <div id="sideFeatures"></div>
+        <!-- 选中分类后的搜索引导（桌面端）。内容见 js/config.js 的 LF.searchHintFor -->
+        <div class="side-search-hint" id="sideSearchHint" hidden></div>
         <div class="side-group">
           <h3>地点</h3>
           <div class="side-list" id="sideArea"></div>
@@ -75,6 +77,10 @@
 
         <!-- 手机端的特征筛选下拉，条目由 JS 按分类生成 -->
         <div class="filter-row" id="mobileFeatureFilters" hidden></div>
+
+        <!-- 选中分类后的搜索引导（手机端，桌面用侧栏那一条）。同一份文案，两处显示。
+             role="status"：分类一换文案就变，读屏用户需要被念出来 -->
+        <div class="search-hint" id="mobileSearchHint" role="status" hidden></div>
 
         <div class="section-head">
           <h2 id="listTitle">最新信息</h2>

@@ -389,10 +389,53 @@
     ui.qs('#descCount').textContent = ui.qs('#fDesc').value.length;
   }
 
-  // ---------------------------------------------------------------- 类型切换
+  // ---------------------------------------------------------------- 类型与分类决定的区块
+  // 出题区显示与否由**两件事**一起决定：是不是招领，以及这个分类要不要出题。
+  // 两处都在改它（切换类型、切换分类），所以统一收在 applyType 里算，
+  // 别在事件回调里各写一遍——两处各写一遍，迟早有一处漏掉。
 
   function isFound() {
     return state.type === 'found';
+  }
+
+  /** 当前分类要不要出认领验证题（「其他」走信任原则，不出题）。 */
+  function categoryAllowsVerify() {
+    return LF.allowVerifyFor(ui.qs('#fCategory').value);
+  }
+
+  /**
+   * 重建"出题区 ⇄ 信任模式说明"这一对互斥区块。
+   *
+   * ★ 「其他」不出题以后，这里必须给出**去处**，不能只是把出题区藏起来：
+   *   发布者点开一个空白的区块会以为功能坏了。所以这一类显示一块说明，
+   *   讲清"描述和照片就是全部线索、见到的人直接联系你"，以及代价
+   *   （没有防冒领闸门，请别把唯一凭据写进公开描述）。
+   */
+  function applyVerifySection() {
+    var allow = categoryAllowsVerify();
+    var found = isFound();
+    var quiz = ui.qs('#quizSection');
+    var hint = ui.qs('#verifyHint');
+
+    quiz.hidden = !(found && allow);
+    if (quiz.hidden) {
+      // 出题区收起来了，里面那套题就不该跟着提交——数据层也会拦一道（见 store.create），
+      // 这里清掉是为了让"页面看到的"和"真正存下去的"一致，不留半截状态。
+      state.questions = [];
+    }
+
+    if (!found || allow) {
+      hint.hidden = true;
+      hint.textContent = '';
+      return;
+    }
+
+    hint.hidden = false;
+    hint.textContent = '「' + LF.categoryOf(ui.qs('#fCategory').value).name +
+      '」这一类不出验证题（信任原则）：这一类物品说不清固定特征，出题只能把描述再抄一遍，' +
+      '所以这里不设认领验证——你写的描述和照片会直接公开，见到的人直接联系你核对。' +
+      '代价是没有防冒领的闸门，所以：别把唯一凭据写进公开描述（例如"书里夹着一张写名字的借书凭条"），' +
+      '这类细节留到对方联系你时再核对。';
   }
 
   function applyType() {
@@ -410,9 +453,11 @@
       ? '补充一些细节，比如物品当时的状态、你捡到后放在哪里了。注意不要写出验证题的答案。'
       : '补充一些细节，比如物品的颜色、贴纸、磨损等特征，方便捡到的同学认出它。';
 
-    ui.qs('#quizSection').hidden = !found;
-    if (found && !ui.qs('#questionList').children.length) renderQuestions();
-    if (found) updateQuizHint();
+    applyVerifySection();
+    if (isFound() && categoryAllowsVerify() && !ui.qs('#questionList').children.length) {
+      renderQuestions();
+    }
+    if (isFound() && categoryAllowsVerify()) updateQuizHint();
   }
 
   // ---------------------------------------------------------------- 下拉选项初始化
@@ -455,6 +500,11 @@
 
     // 有特征定义的分类：自由描述框收起来（详见 publish.html 里的说明）
     ui.qs('#descField').hidden = defs.length > 0;
+
+    // 换分类也可能改变"要不要出题"（「其他」⇄ 其它分类），跟着刷新那一对区块。
+    // 必须放这里，和 renderFeatures 一起被调用：换分类的事件只有一个回调，
+    // 拆成两个回调迟早有人只挂其中一个。
+    applyVerifySection();
 
     if (!defs.length) {
       container.innerHTML = '';
