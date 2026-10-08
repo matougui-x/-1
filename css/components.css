@@ -502,6 +502,46 @@
   font-weight: 600;
 }
 
+/*
+ * 搜索页的"这个分类还能按哪些特征找"提示块。
+ * 里面的取值按钮直接复用了 .filter-chip，视觉上和上面的类型筛选是一套。
+ */
+.feature-hint {
+  background: var(--white);
+  border-radius: var(--r-lg);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.feature-hint-title {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin: 0 0 10px;
+}
+
+.feature-hint-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.feature-hint-group:last-child {
+  margin-bottom: 0;
+}
+
+.feature-hint-name {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-right: 2px;
+}
+
+.feature-hint-more {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
 .filter-spacer {
   flex: 1;
 }

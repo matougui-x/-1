@@ -188,6 +188,93 @@
     };
   }
 
+  /** 每个特征最多摆几个可选值（颜色有 11 个，全摆出来太占地方）。 */
+  var FEATURE_CHIP_MAX = 6;
+
+  /**
+   * 搜索词里出现的分类。打「雨伞」「黑色雨伞」都算命中「雨伞」。
+   *
+   * 只做名称包含匹配，不做同义词——搜「校园卡」不会提示「证件卡片」的特征，
+   * 因为那需要一张"校园卡 = 证件卡片"的对照表。那张表没法自动验证对错，
+   * 与其编一份不如先不做（README 的已知限制里记了这一条）。
+   */
+  function categoryFromKeyword() {
+    var found = null;
+
+    state.keyword.split(' ').forEach(function (term) {
+      if (found || term.length < 2) return;
+      LF.CATEGORIES.forEach(function (category) {
+        if (found) return;
+        // 词里含分类名（黑色雨伞），或分类名里含这个词（雨伞）
+        if (term.indexOf(category.name) !== -1 || category.name.indexOf(term) !== -1) {
+          found = category;
+        }
+      });
+    });
+
+    return found;
+  }
+
+  /**
+   * 输入的是某个分类时，提示"这个分类还能按哪些公开特征找"。
+   *
+   * 只丢一句"可以按特征筛"没用——失主得知道有哪些特征、能填什么值才行。
+   * 所以这里把特征名和取值都摆出来，取值做成可点的 chip：点一下就把它
+   * 加进搜索词（搜索本来就支持空格分隔的多词「与」匹配），再点一下取消。
+   * 等于把"筛选器"直接做进了搜索框。
+   */
+  function renderFeatureHint() {
+    var box = ui.qs('#featureHint');
+    var category = categoryFromKeyword();
+
+    box.innerHTML = '';
+    box.hidden = true;
+
+    if (!category) return;
+
+    var defs = LF.featuresFor(category.key);
+    if (!defs.length || category.key === 'other') return;
+
+    var selected = state.keyword.split(' ');
+    var groups = '';
+
+    defs.forEach(function (def) {
+      // 打码卡号那种没有固定取值的（型号、卡号），摆不出 chip，跳过
+      if (def.kind !== 'select') return;
+
+      var shown = def.options.slice(0, FEATURE_CHIP_MAX);
+      var rest = def.options.length - shown.length;
+
+      groups += '<div class="feature-hint-group">' +
+        '<span class="feature-hint-name">' + esc(def.name) + '</span>' +
+        shown.map(function (value) {
+          return '<button type="button" class="filter-chip' +
+            (selected.indexOf(value) !== -1 ? ' is-on' : '') + '" data-value="' + esc(value) + '">' +
+            esc(value) + '</button>';
+        }).join('') +
+        (rest > 0 ? '<span class="feature-hint-more">等 ' + def.options.length + ' 项</span>' : '') +
+        '</div>';
+    });
+
+    if (!groups) return;
+
+    box.innerHTML = '<p class="feature-hint-title">🔎 ' + esc(category.icon + ' ' + category.name) +
+      ' 还能按这些公开特征找——点一下加进搜索：</p>' + groups;
+    box.hidden = false;
+  }
+
+  /** 点 chip：把这个特征值加进搜索词，已经在词里就取消掉。 */
+  function toggleFeatureValue(value) {
+    var terms = state.keyword.split(' ').filter(function (term) { return term !== ''; });
+    var at = terms.indexOf(value);
+
+    if (at === -1) terms.push(value);
+    else terms.splice(at, 1);
+
+    input.value = terms.join(' ');
+    runSearch(input.value, false, true);
+  }
+
   function renderResults() {
     var posts = store.list({
       keyword: state.keyword,
@@ -201,6 +288,8 @@
     hintEl.textContent = cardHint ? cardHint.text : '多个关键词用空格分开，表示同时满足';
     hintEl.classList.toggle('is-warn', !!(cardHint && cardHint.warn));
     hintEl.classList.toggle('is-wide', !!cardHint);
+
+    renderFeatureHint();
 
     ui.qs('#resultTitle').textContent = '“' + state.keyword + '” 的搜索结果';
     ui.qs('#resultCount').textContent = '共 ' + posts.length + ' 条';
@@ -287,6 +376,12 @@
       input.value = '';
       runSearch('', false);
     }
+  });
+
+  // 特征 chip 用事件委托：这些按钮每次搜索都会重建，逐个绑太容易漏
+  ui.qs('#featureHint').addEventListener('click', function (event) {
+    var chip = event.target.closest('[data-value]');
+    if (chip) toggleFeatureValue(chip.getAttribute('data-value'));
   });
 
   ui.qs('#clearInput').addEventListener('click', function () {
