@@ -397,6 +397,28 @@ body.no-tabbar .toast-wrap {
   box-shadow: 0 0 0 3px rgba(18, 168, 122, .1);
 }
 
+/*
+ * 搜索框右侧的字数提示。
+ * 证件号码按位数精确匹配，边打边能看见"现在几位、对不对得上"，
+ * 比搜完看到 0 条结果再回头数要省事。
+ */
+.searchbox-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.searchbox-count.is-ok {
+  color: var(--green-d);
+  font-weight: 600;
+}
+
+.searchbox-count.is-warn {
+  color: var(--red);
+  font-weight: 600;
+}
+
 .searchbox input {
   flex: 1;
   /* 撑满整个搜索框的高度，而不是只有中间一条能点中。

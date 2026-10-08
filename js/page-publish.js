@@ -29,11 +29,18 @@
   var form = ui.qs('#postForm');
   var editId = U.query('id');
 
-  /** 表单当前状态。照片单独存，因为它在 DOM 里是 dataURL 数组。 */
+  /**
+   * 表单当前状态。照片单独存，因为它在 DOM 里是 dataURL 数组。
+   *
+   * features 按特征键存值，**跨分类保留**：填了「电子产品」的品牌又切到「雨伞」，
+   * 再切回来品牌还在。但提交时只提交当前分类定义的键（见 currentFeatures），
+   * 所以别的分类的残留值不会跟着写进存储。
+   */
   var state = {
     type: 'found',
     photos: [],
-    questions: []
+    questions: [],
+    features: {}
   };
 
   var questionSeq = 0;
@@ -110,10 +117,14 @@
       '<div class="quiz-options">' +
         '<div class="quiz-options-head">' +
           '<span>选项</span>' +
-          '<span class="text-muted">' + (isJudge ? '判断题固定两个选项，选一个正确答案' : '点左边的圆点指定正确答案') + '</span>' +
+          '<span class="text-muted">' + (isJudge
+            ? '判断题固定两个选项，选一个正确答案'
+            : '点左边的圆点指定正确答案 · 选项之间要差别明显') + '</span>' +
         '</div>' +
         options +
         addOption +
+        // 出错时才填内容（见 updateOptionWarnings），平时留空不占地方
+        (isJudge ? '' : '<div class="quiz-opt-warn" data-warn></div>') +
       '</div>' +
     '</div>';
   }
@@ -154,6 +165,35 @@
 
     hint.textContent = text;
     hint.style.color = enough ? 'var(--green-d)' : 'var(--ink-3)';
+
+    updateOptionWarnings();
+  }
+
+  /**
+   * 逐题检查选项之间分不分得清，把结果写进每题下方的提示位。
+   *
+   * 在打字过程中就提示，而不是等提交才报错：写选项的人此刻正在想
+   * "这两个说法够不够区分"，是唯一能听进建议的时机。
+   */
+  function updateOptionWarnings() {
+    state.questions.forEach(function (question) {
+      var card = ui.qs('.quiz-card[data-qid="' + question.id + '"]');
+      if (!card) return;
+
+      var warn = card.querySelector('[data-warn]');
+      if (!warn) return;
+
+      var pair = LF.confusableOptionPair(question.options);
+      if (!pair) {
+        warn.textContent = '';
+        warn.classList.remove('is-warn');
+        return;
+      }
+
+      warn.textContent = '⚠️「' + pair.a + '」和「' + pair.b + '」意思太接近，' +
+        '真正的失主也可能选错，请改成差别明显的说法。';
+      warn.classList.add('is-warn');
+    });
   }
 
   // ---------------------------------------------------------------- 常用模板
@@ -179,7 +219,10 @@
       title: '常用模板（' + LF.categoryOf(ui.qs('#fCategory').value).name + '）',
       bodyHtml: '<p class="text-small text-muted" style="margin-bottom:10px">' +
         '模板只帮你写好题干和候选项，插入后请改成这件物品的实际情况，' +
-        '并点圆点指定正确答案——哪一项对，只有你知道。</p>' + body,
+        '并点圆点指定正确答案——哪一项对，只有你知道。' +
+        '选项之间要差别明显，别把「深蓝色」和「藏青」这种意思相近的说法同时列上去。' +
+        '<strong>另外，上面填过的公开特征不要再出一遍题</strong>——' +
+        '它们本来就公开，问了等于把答案直接送给冒领的人。</p>' + body,
       buttons: [{ text: '关闭', primary: true }]
     });
 
@@ -273,7 +316,10 @@
       area: ui.qs('#fArea').value,
       location: ui.qs('#fLocation').value,
       happenedAt: ui.qs('#fTime').value,
+      // 描述照常读，但数据层会按分类决定收不收（有公开特征的分类一律置空，
+      // 见 store.js 的 create/update）。校验放在数据层一处，页面不重复判断。
       description: ui.qs('#fDesc').value,
+      features: currentFeatures(),
       photos: state.photos.slice(),
       contactName: ui.qs('#fContactName').value,
       contactDept: ui.qs('#fContactDept').value,
@@ -296,6 +342,10 @@
 
     ui.qs('#fTitle').value = post.title || '';
     ui.qs('#fCategory').value = post.category;
+    // 分类是程序设的，不会触发 change，得手动重建一次特征区
+    // （跟下面 refreshSpotList() 手动跟进 #fArea 是同一个道理）
+    state.features = copyFeatures(post.features);
+    renderFeatures();
     ui.qs('#fArea').value = post.area;
     refreshSpotList();
     ui.qs('#fLocation').value = post.location || '';
@@ -384,6 +434,96 @@
       return '<option value="' + esc(spot) + '"></option>';
     }).join('');
   }
+
+  // ---------------------------------------------------------------- 公开特征
+
+  /** 当前分类是否有公开特征（也就是"描述框该不该收起来"）。 */
+  function currentFeatureDefs() {
+    return LF.featuresFor(ui.qs('#fCategory').value);
+  }
+
+  /**
+   * 按当前分类重建特征输入区。
+   *
+   * 和 #fArea → refreshSpotList() 是同一套机制：一个下拉驱动另一块内容。
+   * 每个特征渲染成标准的 .field[data-field="feat_xxx"] 包裹，
+   * 于是字段级报错、自动滚到第一个错误、"开始输入就清红"这些全都白捡。
+   */
+  function renderFeatures() {
+    var container = ui.qs('#featureFields');
+    var defs = currentFeatureDefs();
+
+    // 有特征定义的分类：自由描述框收起来（详见 publish.html 里的说明）
+    ui.qs('#descField').hidden = defs.length > 0;
+
+    if (!defs.length) {
+      container.innerHTML = '';
+      container.hidden = true;
+      return;
+    }
+
+    container.hidden = false;
+    container.innerHTML = defs.map(function (def) {
+      var field = LF.featureFieldName(def.key);
+      var value = state.features[def.key] || '';
+      var control;
+
+      if (def.kind === 'select') {
+        control = '<select class="select" id="' + esc(field) + '" data-feature="' + esc(def.key) + '">' +
+          '<option value="">请选择' + esc(def.name) + '</option>' +
+          def.options.map(function (option) {
+            return '<option value="' + esc(option) + '"' +
+              (option === value ? ' selected' : '') + '>' + esc(option) + '</option>';
+          }).join('') +
+          '</select>';
+      } else {
+        control = '<input class="input" id="' + esc(field) + '" data-feature="' + esc(def.key) + '" ' +
+          'maxlength="' + (def.maxLen || 20) + '" value="' + esc(value) + '" ' +
+          'placeholder="填写' + esc(def.name) + '">';
+      }
+
+      return '<div class="field" data-field="' + esc(field) + '">' +
+        '<label class="field-label" for="' + esc(field) + '">' + esc(def.name) +
+          '<span class="req">*</span></label>' +
+        control +
+        '<div class="field-error"></div>' +
+        (def.hint ? '<div class="field-hint">' + esc(def.hint) + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }
+
+  /**
+   * 浅拷贝一份特征值。
+   * ★ 必须拷贝，不能直接拿来用：store.toPublic() 是浅拷贝，它返回的 post.features
+   *   和存储里那条记录**是同一个对象**。state.features 是要被边打字边改的，
+   *   不拷贝就会在编辑页里直接改到数据层。
+   */
+  function copyFeatures(features) {
+    var out = {};
+    var src = features || {};
+    for (var key in src) {
+      if (Object.prototype.hasOwnProperty.call(src, key)) out[key] = src[key];
+    }
+    return out;
+  }
+
+  /** 只取当前分类定义的键，别的分类留下的值不带出去。 */
+  function currentFeatures() {
+    var out = {};
+    currentFeatureDefs().forEach(function (def) {
+      out[def.key] = state.features[def.key] || '';
+    });
+    return out;
+  }
+
+  /** 边打字边回写 state（不重建 DOM，否则输入框会丢焦点）。 */
+  function onFeatureInput(event) {
+    var key = event.target.getAttribute('data-feature');
+    if (key) state.features[key] = event.target.value;
+  }
+
+  ui.qs('#featureFields').addEventListener('input', onFeatureInput);
+  ui.qs('#featureFields').addEventListener('change', onFeatureInput);
 
   // ---------------------------------------------------------------- 题目编辑事件
 
@@ -524,6 +664,8 @@
   });
 
   ui.qs('#fArea').addEventListener('change', refreshSpotList);
+  // 换分类 = 换一套公开特征，同时也决定描述框收不收起来
+  ui.qs('#fCategory').addEventListener('change', renderFeatures);
   ui.qs('#fTitle').addEventListener('input', updateCounters);
   ui.qs('#fDesc').addEventListener('input', updateCounters);
 
@@ -595,8 +737,14 @@
     ui.qs('#footTip').textContent = '保存后，首页和搜索结果里的内容会立即更新，浏览量和发布时间保持不变。';
     fillForm(existing);
   } else {
-    ui.qs('#fCategory').value = 'card';
+    // 支持 ?category=other 直达。除了分享方便，这也是"其他"分类那条分支
+    // （描述框显示、特征区为空）唯一能被 dump-dom 检查到的入口——
+    // 新建页默认是「证件卡片」，光加载 publish.html 走不到那条路。
+    var preset = U.query('category');
+    ui.qs('#fCategory').value =
+      (preset && LF.fields(LF.CATEGORIES).indexOf(preset) !== -1) ? preset : 'card';
     applyType();
+    renderFeatures();     // 默认分类就有特征，首屏必须渲染出来
     renderQuestions();
     renderPhotos();
   }
@@ -605,6 +753,7 @@
   ui.markReady({
     page: 'publish',
     mode: editId ? 'edit' : 'new',
-    questions: state.questions.length
+    questions: state.questions.length,
+    features: currentFeatureDefs().length
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

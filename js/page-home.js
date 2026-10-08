@@ -19,14 +19,49 @@
   var store = app.store;
   var myId = app.myId;
 
-  /** 全局唯一的一份筛选状态。 */
+  /** 特征筛选下拉最多列出几个取值（text 型特征的取值是数据里现取的，得封顶）。 */
+  var FEATURE_FILTER_MAX = 6;
+
+  /**
+   * 全局唯一的一份筛选状态。
+   * features 是"特征键 → 取值"的映射，只保存非空的项（取消筛选就直接 delete）。
+   */
   var state = {
     type: 'all',
     category: 'all',
     area: 'all',
     status: 'all',
-    sort: 'latest'
+    sort: 'latest',
+    features: {}
   };
+
+  /**
+   * 支持 ?category=card&feature.brand=华为&area=library 这样的直达链接。
+   *
+   * 除了分享方便，这还解决了一个实打实的问题：首页默认 category 是 all，
+   * 特征筛选区根本不会渲染，于是"页面自检 PASS"证明不了这块功能是好的。
+   * 有了参数，就能用同一套 dump-dom 命令把特征筛选也测到。
+   */
+  (function initFromQuery() {
+    var category = U.query('category');
+    if (category && LF.fields(LF.CATEGORIES).indexOf(category) !== -1) {
+      state.category = category;
+    }
+
+    LF.featureKeysFor(state.category).forEach(function (key) {
+      var value = U.query('feature.' + key);
+      if (value) state.features[key] = value;
+    });
+
+    var area = U.query('area');
+    if (area && LF.fields(LF.AREAS).indexOf(area) !== -1) state.area = area;
+
+    var type = U.query('type');
+    if (type && LF.fields(LF.TYPES).indexOf(type) !== -1) state.type = type;
+
+    var status = U.query('status');
+    if (status === 'open' || status === 'done') state.status = status;
+  })();
 
   var listEl = ui.qs('#list');
   var typeSeg = ui.qs('#typeSeg');
@@ -36,7 +71,8 @@
   /** 当前是否处于"有筛选条件"的状态，用于决定要不要提示清空。 */
   function hasActiveFilter() {
     return state.type !== 'all' || state.category !== 'all' ||
-      state.area !== 'all' || state.status !== 'all';
+      state.area !== 'all' || state.status !== 'all' ||
+      Object.keys(state.features).length > 0;
   }
 
   /** 统计每个选项下有多少条，显示在选项右侧。 */
@@ -115,6 +151,9 @@
       ));
     });
 
+    // —— 公开特征筛选（只在选了具体分类时出现）——
+    renderFeatureFilters(all);
+
     var sideArea = ui.qs('#sideArea');
     sideArea.innerHTML = '';
     sideArea.appendChild(optionButton('全部地点', countBy('area', 'all'),
@@ -156,8 +195,112 @@
 
   function setFilter(key, value) {
     state[key] = value;
+    // 换分类 = 换一整套特征，上一类的筛选条件留着没有意义，还可能筛出空列表
+    if (key === 'category') state.features = {};
     renderFilters();
     renderList();
+  }
+
+  /** 设置某个特征的筛选值；传空或 'all' 表示取消这一项。 */
+  function setFeature(key, value) {
+    if (!value || value === 'all') delete state.features[key];
+    else state.features[key] = value;
+    renderFilters();
+    renderList();
+  }
+
+  /**
+   * 一个特征筛选组里可选的取值。
+   *
+   * select 型直接用字典里定死的选项；text 型（型号、卡号前缀）取值发散，
+   * 字典里没有，就从当前分类的真实数据里取出现过的值，按条数排序、封顶几个，
+   * 免得下拉长到没法看。
+   */
+  function featureFilterOptions(def, scoped) {
+    if (def.kind === 'select') return def.options;
+
+    var counter = {};
+    scoped.forEach(function (post) {
+      var value = post.features ? post.features[def.key] : '';
+      if (value) counter[value] = (counter[value] || 0) + 1;
+    });
+
+    return Object.keys(counter).sort(function (a, b) {
+      return (counter[b] - counter[a]) || (a < b ? -1 : 1);
+    }).slice(0, FEATURE_FILTER_MAX);
+  }
+
+  /**
+   * 渲染公开特征筛选：桌面侧栏一组 side-list，手机端一个下拉。
+   *
+   * ★ 计数时要**排除本组自己的选择**（见下面的 base）：一旦勾了"品牌=华为"，
+   *   要是还按含本组条件的结果去数，其它品牌的条数会全变成 0，这一组就只剩
+   *   一个选项、再也切不回去了。其它组的条件照常参与计数。
+   */
+  function renderFeatureFilters(all) {
+    var side = ui.qs('#sideFeatures');
+    var mobile = ui.qs('#mobileFeatureFilters');
+    side.innerHTML = '';
+    mobile.innerHTML = '';
+    mobile.hidden = true;
+
+    var defs = LF.featuresFor(state.category);
+    if (state.category === 'all' || !defs.length) return;
+
+    var scoped = all.filter(function (post) { return post.category === state.category; });
+    var keys = LF.featureKeysFor(state.category);
+    var added = 0;
+
+    defs.forEach(function (def) {
+      // 通配型特征（打码的卡号）不做筛选控件：它的取值是 `350504************`
+      // 这种模式串，摆成一排筛选按钮既看不懂也没法精确匹配。
+      // 这一类靠上面的关键词搜索——* 会自动匹配任意数字。
+      if (def.wildcard) return;
+
+      var options = featureFilterOptions(def, scoped);
+      if (!options.length) return;
+
+      var base = scoped.filter(function (post) {
+        return keys.every(function (other) {
+          if (other === def.key) return true;
+          var wanted = state.features[other];
+          if (!wanted) return true;
+          return (post.features ? post.features[other] : '') === wanted;
+        });
+      });
+
+      var current = state.features[def.key] || 'all';
+      function countOf(value) {
+        return base.filter(function (post) {
+          var actual = post.features ? post.features[def.key] : '';
+          return value === 'all' || actual === value;
+        }).length;
+      }
+
+      // —— 桌面端 ——
+      var group = ui.el('<div class="side-group"><h3></h3><div class="side-list"></div></div>');
+      group.querySelector('h3').textContent = def.name;
+      var list = group.querySelector('.side-list');
+      list.appendChild(optionButton('全部' + def.name, countOf('all'), current === 'all',
+        function () { setFeature(def.key, 'all'); }));
+      options.forEach(function (value) {
+        list.appendChild(optionButton(value, countOf(value), current === value,
+          function () { setFeature(def.key, value); }));
+      });
+      side.appendChild(group);
+
+      // —— 手机端 ——
+      var select = ui.el('<select class="filter-select"></select>');
+      select.setAttribute('aria-label', '按' + def.name + '筛选');
+      fillSelect(select, [{ key: 'all', name: '全部' + def.name }].concat(options.map(function (value) {
+        return { key: value, name: value };
+      })), current, function (value) { setFeature(def.key, value); });
+      mobile.appendChild(select);
+
+      added++;
+    });
+
+    mobile.hidden = added === 0;
   }
 
   // ---------------------------------------------------------------- 列表
@@ -166,6 +309,9 @@
   function currentTitle() {
     var parts = [];
     if (state.category !== 'all') parts.push(LF.categoryOf(state.category).name);
+    LF.featureKeysFor(state.category).forEach(function (key) {
+      if (state.features[key]) parts.push(state.features[key]);
+    });
     if (state.area !== 'all') parts.push(LF.areaOf(state.area).name);
     if (state.type !== 'all') parts.push(LF.typeOf(state.type).name);
     parts.push('信息');
@@ -179,6 +325,7 @@
       area: state.area,
       status: state.status,
       sort: state.sort,
+      features: state.features,
       viewerId: myId
     });
 
@@ -190,7 +337,7 @@
       empty: hasActiveFilter() ? {
         icon: '🔍',
         title: '没有符合条件的信息',
-        desc: '换个分类或地点试试，也可以清空筛选条件看看全部信息。'
+        desc: '换个分类、地点或特征试试，也可以清空筛选条件看看全部信息。'
       } : {
         icon: '📭',
         title: '还没有任何失物招领信息',
@@ -219,6 +366,7 @@
     state.category = 'all';
     state.area = 'all';
     state.status = 'all';
+    state.features = {};
     syncTypeButtons();
     renderFilters();
     renderList();

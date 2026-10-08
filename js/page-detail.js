@@ -74,12 +74,36 @@
     return chips;
   }
 
+  /**
+   * 自由描述该不该展示。
+   *
+   * 正常情况：锁了公开特征的分类（字典里有特征定义）不再展示描述——那一栏已经
+   * 由特征行取代，描述框在发布页也收起来了。
+   *
+   * 例外是**旧版记录**：它们既没有公开特征、手里又只有那段描述。这时继续展示，
+   * 免得详情页变成一片空白。等发布者在「我的发布」里编辑一次、补上特征，
+   * 描述就自然让位——不需要额外的迁移或标志位。
+   */
+  function showsDescription(post) {
+    if (!post.description) return false;
+    if (!LF.featuresFor(post.category).length) return true;   // 「其他」：本来就靠描述承载信息
+    return !LF.featureValues(post).length;
+  }
+
   function infoRowsHtml(post) {
     var isFound = post.type === 'found';
     var rows = [];
 
     rows.push(['信息类型', esc(LF.typeOf(post.type).full)]);
     rows.push(['物品分类', esc(post.categoryIcon + ' ' + post.categoryName)]);
+
+    // 公开特征：按分类的字典渲染（不是遍历 post.features，否则脏数据里的
+    // 未知键会凭空多出一行）。没填的项直接不显示，老记录可能整条都是空的。
+    LF.featuresFor(post.category).forEach(function (def) {
+      var value = post.features ? post.features[def.key] : '';
+      if (value) rows.push([esc(def.name), esc(value)]);
+    });
+
     rows.push([isFound ? '拾取地点' : '丢失地点', esc(post.location) + '（' + esc(post.areaName) + '）']);
     rows.push([isFound ? '拾取时间' : '丢失时间', esc(U.formatDateTime(post.happenedAt)) + ' 左右']);
 
@@ -153,7 +177,7 @@
       '</div>' +
       '<div class="mt-12">' + infoRowsHtml(post) + '</div>' +
       lockboxHtml(post) +
-      (post.description
+      (showsDescription(post)
         ? '<div class="panel mt-12">' +
             '<h4 style="font-size:13px;color:var(--ink-3);font-weight:500;margin-bottom:8px">物品描述</h4>' +
             '<p style="line-height:1.8;white-space:pre-wrap">' + esc(post.description) + '</p>' +

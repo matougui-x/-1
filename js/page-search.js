@@ -74,13 +74,53 @@
    *   2. U.clean() 会去掉首尾空白，用户想打「耳机 图书馆」时，
    *      刚敲下的那个空格会被立刻吃掉，多关键词根本没法输入。
    */
+  /**
+   * 搜索框右侧的字数提示。
+   *
+   * 平时只报"几个字"；一旦看起来像证件号码，就改报"几位"，并按能不能对上
+   * 库里的位数标绿/标红。证件号码是按位数精确匹配的，边打边能看见
+   * "现在几位、对不对得上"，比搜完看到 0 条结果再回头数要省事得多。
+   */
+  function renderInputCount() {
+    var el = ui.qs('#inputCount');
+    var value = U.clean(input.value);
+
+    el.classList.remove('is-ok', 'is-warn');
+
+    if (!value) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+
+    el.hidden = false;
+
+    if (!/^[0-9*]{6,24}$/.test(value)) {
+      el.textContent = value.length + ' 字';
+      return;
+    }
+
+    el.textContent = value.length + ' 位';
+
+    var lengths = cardNumberLengths();
+    if (lengths.length) {
+      el.classList.add(lengths.indexOf(value.length) === -1 ? 'is-warn' : 'is-ok');
+    }
+  }
+
+  /** 输入框右侧的两个小部件（清空按钮、字数提示）跟着输入内容一起变。 */
+  function syncInputChrome() {
+    ui.qs('#clearInput').hidden = !input.value;
+    renderInputCount();
+  }
+
   function runSearch(keyword, commit, syncInput) {
     state.keyword = U.clean(keyword == null ? input.value : keyword);
 
     if (syncInput) {
       input.value = state.keyword;
     }
-    ui.qs('#clearInput').hidden = !input.value;
+    syncInputChrome();
 
     if (commit && state.keyword) {
       store.pushHistory(state.keyword);
@@ -100,6 +140,54 @@
     renderResults();
   }
 
+  /** 库里所有打码证件号码的位数（去重升序）。 */
+  function cardNumberLengths() {
+    var lengths = [];
+
+    store.list().forEach(function (post) {
+      LF.featuresFor(post.category).forEach(function (def) {
+        if (!def.wildcard) return;
+        var value = post.features ? post.features[def.key] : '';
+        if (value && lengths.indexOf(value.length) === -1) lengths.push(value.length);
+      });
+    });
+
+    return lengths.sort(function (a, b) { return a - b; });
+  }
+
+  /**
+   * 搜索词里出现证件号码时，给一条关于位数的提示；不涉及证件号码就返回 null。
+   *
+   * 为什么要专门做这个：打码卡号是按**位数**精确匹配的，少一位、多一位
+   * 都是 0 条结果——而"0 条结果"和"没人捡到"在页面上长得一模一样。
+   * 失主很可能就此以为东西没被人捡到，实际只是自己少打了一位。
+   * 所以这里不只提醒，还直接把两边的位数摆出来。
+   */
+  function cardNumberHint() {
+    var term = null;
+
+    // 关键词可能是「身份证 350504…」这种多词组合，逐个找像证件号码的那个
+    state.keyword.split(' ').forEach(function (part) {
+      if (!term && /^[0-9*]{6,24}$/.test(part)) term = part;
+    });
+    if (!term) return null;
+
+    var lengths = cardNumberLengths();
+
+    if (lengths.length && lengths.indexOf(term.length) === -1) {
+      return {
+        warn: true,
+        text: '⚠️ 你填的是 ' + term.length + ' 位，库里的证件号码是 ' + lengths.join(' / ') +
+          ' 位。证件号码要按位数精确匹配，少一位多一位都搜不到。'
+      };
+    }
+
+    return {
+      warn: false,
+      text: '证件号码按位数精确匹配：位数要和卡号一样长，不记得的位置写 *，记得的数字也要对得上。'
+    };
+  }
+
   function renderResults() {
     var posts = store.list({
       keyword: state.keyword,
@@ -108,16 +196,24 @@
       viewerId: myId
     });
 
+    var cardHint = cardNumberHint();
+    var hintEl = ui.qs('#keywordHint');
+    hintEl.textContent = cardHint ? cardHint.text : '多个关键词用空格分开，表示同时满足';
+    hintEl.classList.toggle('is-warn', !!(cardHint && cardHint.warn));
+    hintEl.classList.toggle('is-wide', !!cardHint);
+
     ui.qs('#resultTitle').textContent = '“' + state.keyword + '” 的搜索结果';
     ui.qs('#resultCount').textContent = '共 ' + posts.length + ' 条';
-    ui.qs('#keywordHint').textContent = '多个关键词用空格分开，表示同时满足';
 
     ui.renderCards(listEl, posts, {
       grid: true,
       empty: {
         icon: '🔍',
         title: '没有找到「' + state.keyword + '」相关的信息',
-        desc: '换个说法试试，比如只搜「校园卡」而不是「我的校园卡」；也可以回首页按分类和地点筛选。',
+        // 位数对不上是"搜不到"里最容易被误读成"没人捡到"的一种，优先说这个
+        desc: (cardHint && cardHint.warn)
+          ? cardHint.text + '把不记得的位置用 * 补上，凑够位数再试一次。'
+          : '换个说法试试，比如只搜「校园卡」而不是「我的校园卡」；也可以回首页按分类和地点筛选。',
         actions: [
           { text: '回首页按分类找', href: 'index.html', primary: true },
           { text: '发布一条寻物信息', href: 'publish.html' }
@@ -164,12 +260,14 @@
 
   input.addEventListener('compositionend', function () {
     composing = false;
-    ui.qs('#clearInput').hidden = !input.value;
+    syncInputChrome();
     debounced();          // 选词上屏之后再发起搜索
   });
 
   input.addEventListener('input', function (event) {
-    ui.qs('#clearInput').hidden = !input.value;
+    // 字数提示要**立刻**跟上，不能等搜索那边的 200ms 防抖——
+    // 用户边打边数位数，慢半拍就没用了
+    syncInputChrome();
     // 拼字过程中不触发搜索。isComposing 是浏览器给的标准标志，
     // 和自己维护的 composing 标记一起判断，兼容不同浏览器的触发时序。
     if (composing || event.isComposing) return;

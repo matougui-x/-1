@@ -11,7 +11,13 @@ describe('浏览、搜索与筛选', function () {
   var LF = root.LF;
   var T = root.T;
 
-  /** 造一批用于搜索的数据：每条的可搜索字段都是刻意设计的。 */
+  /**
+   * 造一批用于搜索的数据：每条的可搜索字段都是刻意设计的。
+   *
+   * 注意公开特征：card / headphone / umbrella 三个分类在字典里都有特征定义，
+   * 所以这三条必须带上 features 才创建得出来，而且它们的 description 会被
+   * 数据层强制置空（有特征就不留自由描述了）。只有 other 那条还留着描述。
+   */
   function buildStore() {
     var store = T.makeStore();
     var me = 'me_1';
@@ -21,7 +27,7 @@ describe('浏览、搜索与筛选', function () {
       category: 'card',
       area: 'teaching',
       location: '教学楼 A 栋 301 教室',
-      description: '在最后一排捡到的，卡面有贴纸。'
+      features: { cardPrefix: '202305******' }
     }), me);
 
     store.create(T.validLost({
@@ -29,7 +35,7 @@ describe('浏览、搜索与筛选', function () {
       category: 'headphone',
       area: 'library',
       location: '图书馆三楼自习区',
-      description: '带充电盒，磨砂黑。'
+      features: { brand: '华为', color: '黑色' }
     }), 'other_1');
 
     store.create(T.validFound({
@@ -37,12 +43,12 @@ describe('浏览、搜索与筛选', function () {
       category: 'umbrella',
       area: 'canteen',
       location: '第二食堂门口',
-      description: '伞套还在。'
+      features: { color: '粉色', handle: '折叠短柄' }
     }), 'other_2');
 
     store.create(T.validLost({
       title: '宿舍钥匙一串',
-      category: 'key',
+      category: 'other',
       area: 'gym',
       location: '体育馆篮球场',
       description: '蓝色挂绳，一共三把。'
@@ -290,6 +296,144 @@ describe('浏览、搜索与筛选', function () {
       var store = buildStore();
       var words = store.hotWords(5);
       assert.include(words, '证件卡片', '应当从已有信息里统计出分类词');
+    });
+  });
+
+  /**
+   * 公开特征既然是给失主"找东西"用的，就必须真的能被搜到、被筛到。
+   * 光把字段存下来不接进搜索，等于没做。
+   */
+  describe('公开特征的搜索与筛选', function () {
+    it('搜特征值能命中（搜「华为」找到那条耳机）', function () {
+      var store = buildStore();
+      assert.deepEqual(titles(store.list({ keyword: '华为' })), ['黑色蓝牙耳机']);
+    });
+
+    it('没有的取值搜不到', function () {
+      var store = buildStore();
+      assert.lengthOf(store.list({ keyword: '苹果' }), 0);
+    });
+
+    it('按特征精确筛选', function () {
+      var store = buildStore();
+      assert.deepEqual(titles(store.list({ features: { color: '粉色' } })), ['粉色折叠雨伞']);
+    });
+
+    it('特征筛选取值精确匹配，不做模糊', function () {
+      var store = buildStore();
+      assert.lengthOf(store.list({ features: { color: '粉' } }), 0);
+    });
+
+    it('特征筛选可以和分类叠加', function () {
+      var store = buildStore();
+      assert.lengthOf(store.list({ category: 'umbrella', features: { color: '粉色' } }), 1);
+      assert.lengthOf(store.list({ category: 'headphone', features: { color: '粉色' } }), 0);
+    });
+
+    it('多个特征之间是「与」的关系', function () {
+      var store = buildStore();
+      assert.lengthOf(store.list({ features: { color: '黑色', brand: '华为' } }), 1);
+      assert.lengthOf(store.list({ features: { color: '粉色', brand: '华为' } }), 0);
+    });
+
+    it('空对象和 all 都表示不筛这一项', function () {
+      var store = buildStore();
+      assert.lengthOf(store.list({ features: {} }), 4);
+      assert.lengthOf(store.list({ features: { color: 'all' } }), 4);
+    });
+
+    it('没有 features 字段的记录不会被特征筛选炸掉', function () {
+      var store = buildStore();
+      // 「其他」分类没有特征定义，它的 features 是空对象
+      var others = store.list({ category: 'other' });
+      assert.lengthOf(others, 1);
+      assert.lengthOf(store.list({ category: 'other', features: { color: '黑色' } }), 0);
+    });
+
+    it('特征值参与搜索时，别的字段不受影响', function () {
+      var store = buildStore();
+      assert.deepEqual(titles(store.list({ keyword: '图书馆' })), ['黑色蓝牙耳机']);
+    });
+  });
+
+  /**
+   * 打码卡号：信息里只写满总位数、露出最多 6 位数字，其余用 *。
+   * 失主搜自己完整的号码时要能命中——走的是通配匹配，不是普通子串匹配。
+   */
+  describe('打码卡号的通配搜索', function () {
+    var FULL = '350504************';      // 6 位数字 + 12 个 *，共 18 位
+
+    function storeWithCard() {
+      var store = T.makeStore();
+      var created = store.create(T.validFound({
+        title: '身份证一张',
+        features: { cardPrefix: FULL }
+      }), 'u1');
+      assert.isTrue(created.ok, JSON.stringify(created.errors));
+      return store;
+    }
+
+    it('搜完整身份证号能命中', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '350504200510291653' }), 1);
+    });
+
+    it('换一个出生日期的号码同样命中（* 代表任意数字）', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '350504200610301532' }), 1);
+    });
+
+    it('不记得中间几位，用 * 顶位也能命中', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '35050420**********' }), 1);
+    });
+
+    it('只记得头尾、中间全用 * 也能命中', function () {
+      // 注意位数：6 位数字 + 8 个 * + 4 位数字 = 18，和档案里的卡号一样长
+      assert.lengthOf(storeWithCard().list({ keyword: '350504********1653' }), 1);
+    });
+
+    // 搜索词里的 * 是"这一位我不记得"，模式和搜索词任意一边是 * 就算过
+    it('搜索词里的 * 可以盖住拾得者露出来的数字', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '******200510291653' }), 1);
+    });
+
+    it('位数不够就不算命中（必须写满总位数）', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '350504200' }), 0);
+    });
+
+    it('只报露出的那 6 位也不算命中（位数不一致）', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '350504' }), 0);
+    });
+
+    it('位数比卡号多也不算命中', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '3505042005102916530' }), 0);
+    });
+
+    it('前 6 位对不上就搜不到', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '350505200510291653' }), 0);
+    });
+
+    it('打码区间里的数字不能单独搜到（位数不一致）', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: '200510291653' }), 0);
+    });
+
+    it('直接把打码串粘进去也能命中', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: FULL }), 1);
+    });
+
+    // 记下这个结果，不是因为它好，而是因为它是有意为之：
+    // 全 * 只表示"这一位我不记得"，等于不筛号码，效果就是"把有卡号的信息捞出来"。
+    // 匹配只代表可能相关，能不能拿到联系方式仍然要过认领验证那一关。
+    it('搜索词全填 * 相当于不筛号码', function () {
+      assert.lengthOf(storeWithCard().list({ keyword: FULL.replace(/[0-9]/g, '*') }), 1);
+      // 但捞不出没有卡号特征的信息
+      var store = storeWithCard();
+      store.create(T.validLost({ category: 'headphone', title: '黑色耳机' }), 'u1');
+      assert.lengthOf(store.list({ keyword: FULL.replace(/[0-9]/g, '*') }), 1);
+    });
+
+    it('普通字段的搜索没有因此变得宽松', function () {
+      var store = storeWithCard();
+      assert.lengthOf(store.list({ keyword: '身份证' }), 1);
+      assert.lengthOf(store.list({ keyword: '学生证' }), 0);
     });
   });
 });

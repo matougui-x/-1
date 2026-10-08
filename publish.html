@@ -45,8 +45,12 @@
           <label class="field-label" for="fCategory">物品分类<span class="req">*</span></label>
           <select class="select" id="fCategory" name="category"></select>
           <div class="field-error"></div>
-          <div class="field-hint">分类会影响「常用模板」里能直接插入的题目，建议先选分类再出题。</div>
+          <div class="field-hint">分类会影响「常用模板」里能直接插入的题目，也决定下面要填哪些公开特征。</div>
         </div>
+
+        <!-- 公开特征：内容由 JS 按分类渲染（见 page-publish.js 的 renderFeatures）。
+             除「其他」外，每个分类只能填这里定死的 1–2 项，其余细节留到验证题里问。 -->
+        <div id="featureFields"></div>
 
         <div class="field" data-field="area">
           <label class="field-label" for="fArea">所在区域<span class="req">*</span></label>
@@ -69,7 +73,11 @@
           <div class="field-error"></div>
         </div>
 
-        <div class="field" data-field="description">
+        <!-- ★ 这个 field 用 hidden 整体收起，**不要从 DOM 里删掉**：
+             page-publish.js 的 updateCounters()、applyType()、输入监听三处
+             都是无保护地取 #fDesc，元素没了发布页会直接白屏。
+             只有「其他」分类（没有特征定义的那一类）才显示它。 -->
+        <div class="field" id="descField" data-field="description">
           <label class="field-label" for="fDesc">物品描述<span class="text-muted" style="font-weight:400">（选填，公开展示）</span></label>
           <textarea class="textarea" id="fDesc" name="description" maxlength="300"
                     placeholder="补充一些细节，比如物品当时的状态、你捡到后放在哪里了。"></textarea>

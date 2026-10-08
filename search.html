@@ -25,6 +25,8 @@
       <span>🔍</span>
       <input type="search" id="searchInput" placeholder="搜索校园卡、钥匙、雨伞、耳机…"
              autocomplete="off" aria-label="搜索关键词" enterkeyhint="search">
+      <!-- 字数提示：平时报"几个字"，看起来像证件号码时改报"几位"并标绿/标红 -->
+      <span class="searchbox-count" id="inputCount" hidden></span>
       <button type="button" class="link-muted" id="clearInput" hidden aria-label="清空">✕</button>
     </div>
 

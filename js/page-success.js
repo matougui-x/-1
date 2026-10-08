@@ -72,7 +72,7 @@
       '<div class="section-head"><h2>公开展示的信息预览</h2></div>' +
       ui.cardHtml(post, { timePrefix: false }) +
       '<p class="text-small text-muted mt-12">其他同学在首页和搜索结果里看到的就是这张卡片，' +
-      '点进去可以看到完整描述和地点。</p>' +
+      '点进去可以看到公开特征和地点。你写在验证题里的答案不会显示出来。</p>' +
     '</div>' +
 
     protectedTip +

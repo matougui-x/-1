@@ -467,6 +467,19 @@
   margin-right: 2px;
 }
 
+/* 证件号码的位数提示比一句话长得多，让它自己占一行，别把筛选按钮挤变形 */
+.filter-label.is-wide {
+  flex: 1 1 100%;
+  margin-right: 0;
+  line-height: 1.6;
+}
+
+/* 位数和库里的对不上时标红——这是"搜不到"里最容易被误读的一种 */
+.filter-label.is-warn {
+  color: var(--red);
+  font-weight: 600;
+}
+
 .filter-chip {
   font-size: 13px;
   color: var(--ink-2);
@@ -1106,6 +1119,18 @@
 .quiz-opt .quiz-opt-remove {
   flex: 0 0 auto;
   font-size: 12.5px;
+}
+
+/* 选项之间分不清时的实时提示。平时是空的，不占位也不影响排版 */
+.quiz-card .quiz-opt-warn {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.quiz-card .quiz-opt-warn.is-warn {
+  color: var(--red);
 }
 
 .quiz-card .quiz-add-opt {

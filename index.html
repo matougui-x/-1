@@ -47,6 +47,8 @@
           <h3>物品分类</h3>
           <div class="side-list" id="sideCategory"></div>
         </div>
+        <!-- 公开特征筛选：只在选中了具体分类、且该分类有特征定义时才有内容 -->
+        <div id="sideFeatures"></div>
         <div class="side-group">
           <h3>地点</h3>
           <div class="side-list" id="sideArea"></div>
@@ -70,6 +72,9 @@
           <select class="filter-select" id="fAreaMobile" aria-label="按地点筛选"></select>
           <select class="filter-select" id="fStatusMobile" aria-label="按状态筛选"></select>
         </div>
+
+        <!-- 手机端的特征筛选下拉，条目由 JS 按分类生成 -->
+        <div class="filter-row" id="mobileFeatureFilters" hidden></div>
 
         <div class="section-head">
           <h2 id="listTitle">最新信息</h2>

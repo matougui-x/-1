@@ -9,7 +9,7 @@
   var LF = (root.LF = root.LF || {});
 
   /** 数据版本号，改变数据结构时递增，用于旧数据迁移（见 store.js 的 migratePost）。 */
-  LF.DATA_VERSION = 2;
+  LF.DATA_VERSION = 3;
 
   /** 本地存储键名。加前缀避免与同源下其它页面冲突。 */
   LF.KEYS = {
@@ -31,10 +31,8 @@
   /** 物品分类，icon 同时作为没有照片时的缩略图。 */
   LF.CATEGORIES = [
     { key: 'card', name: '证件卡片', icon: '💳' },
-    { key: 'key', name: '钥匙', icon: '🔑' },
     { key: 'headphone', name: '耳机', icon: '🎧' },
     { key: 'umbrella', name: '雨伞', icon: '☂️' },
-    { key: 'book', name: '书籍', icon: '📚' },
     { key: 'cup', name: '水杯', icon: '🥤' },
     { key: 'electronics', name: '电子产品', icon: '📱' },
     { key: 'bag', name: '包与书包', icon: '🎒' },
@@ -42,6 +40,75 @@
     { key: 'glasses', name: '眼镜', icon: '👓' },
     { key: 'other', name: '其他', icon: '📦' }
   ];
+
+  /**
+   * 特征字段的类型。
+   * select：取值来自固定选项，两两分得清（失主能直接拿来筛选）；
+   * text：取值发散（型号、卡号前缀），不做下拉，只进搜索。
+   */
+  LF.FEATURE_KINDS = ['select', 'text'];
+
+  /** 颜色类特征共用的选项。七个分类都引用这一份，改一次全生效。只读，别改它。 */
+  LF.COMMON_COLORS = ['黑色', '白色', '灰色', '蓝色', '红色', '粉色', '绿色', '黄色', '棕色', '紫色', '其他'];
+
+  /**
+   * 公开特征字典：★ 每个分类对外**只能**露出这里定死的 1–2 项，别的都不许写。
+   *
+   * 为什么要把公开信息锁死：
+   *   1. 防泄漏。原来那条 300 字的自由描述，是拾得者"顺手把特征写出来"的主要出口——
+   *      演示数据里就有：描述写着"伞柄有一道划痕"，而验证题正好问伞面最明显的特征。
+   *   2. 方便查找。特征取值固定，失主才能按"品牌=华为"这种条件筛，也才能搜得到。
+   *
+   * ★ 还有一条不写在代码里但必须守的规矩：**这份白名单同时是"出题禁区"。**
+   *   品牌既然公开了，验证题就不能再问品牌，否则就是给冒领者送分。
+   *   QUESTION_TEMPLATES 里的题目只问磨损、内容物、个人记号这类公开面看不到的东西。
+   *
+   * ⚠️ 改这个字典时记得同步三处：seed.js 的演示数据、test/specs 的夹具、
+   *    README 与博客里的出题规则表。
+   *
+   * other 刻意不定义：它在发布页保留自由描述框，是唯一的兜底分类。
+   */
+  LF.FEATURES = {
+    card: [
+      {
+        key: 'cardPrefix', name: '卡号（打码）', kind: 'text', wildcard: true,
+        minLen: 6, maxLen: 24, maxDigits: 6,
+        pattern: /^[0-9*]+$/, format: '只能填数字，其余位置请用 * 代替',
+        hint: '照卡号的总位数写满，其中最多写出 6 位数字，其余一律用 * 顶位：' +
+          '比如 18 位的身份证写成「350504************」。' +
+          '失主搜索时位数也要写满，不记得的位置同样用 * 代替，' +
+          '比如搜 350504200510291653、35050420********** 或 350504********1653 都能找到这条。'
+      }
+    ],
+    headphone: [
+      { key: 'brand', name: '品牌', kind: 'select', options: ['苹果', '华为', '小米', '索尼', '三星', '漫步者', '其他'] },
+      { key: 'color', name: '外观颜色', kind: 'select', options: LF.COMMON_COLORS }
+    ],
+    umbrella: [
+      { key: 'color', name: '伞面颜色', kind: 'select', options: LF.COMMON_COLORS },
+      { key: 'handle', name: '柄型', kind: 'select', options: ['直柄', '弯柄', '自动伸缩', '折叠短柄'] }
+    ],
+    cup: [
+      { key: 'color', name: '颜色', kind: 'select', options: LF.COMMON_COLORS },
+      { key: 'material', name: '材质', kind: 'select', options: ['不锈钢', '塑料', '玻璃', '陶瓷', '其他'] }
+    ],
+    electronics: [
+      { key: 'brand', name: '品牌', kind: 'select', options: ['苹果', '华为', '小米', '联想', '戴尔', '索尼', '其他'] },
+      { key: 'model', name: '型号', kind: 'text', maxLen: 20, hint: '只填型号，比如「FreeBuds SE」。' }
+    ],
+    bag: [
+      { key: 'bagType', name: '类型', kind: 'select', options: ['双肩包', '单肩包', '斜挎包', '手提包', '行李箱'] },
+      { key: 'color', name: '颜色', kind: 'select', options: LF.COMMON_COLORS }
+    ],
+    clothing: [
+      { key: 'clothType', name: '类型', kind: 'select', options: ['外套', '卫衣', 'T恤', '裤子', '帽子', '围巾', '其他'] },
+      { key: 'color', name: '颜色', kind: 'select', options: LF.COMMON_COLORS }
+    ],
+    glasses: [
+      { key: 'frameMaterial', name: '镜框材质', kind: 'select', options: ['塑料', '金属', '半框', '无框', '其他'] },
+      { key: 'color', name: '镜框颜色', kind: 'select', options: LF.COMMON_COLORS }
+    ]
+  };
 
   /** 地点区域，用于列表筛选；具体地点由用户在此基础上补充。 */
   LF.AREAS = [
@@ -88,31 +155,28 @@
   /**
    * 出题模板：按物品分类给两条可直接插入的客观题，发布者改一改就能用。
    * 只提供题干和候选项，"哪一项才是对的"必须由发布者自己指定。
+   *
+   * ★ 出题禁区：这里的问题**只问 LF.FEATURES 看不到的东西**——磨损、内容物、
+   *   个人记号、附件细节。凡是已经公开的特征（品牌、颜色、柄型、材质…）都不能再问，
+   *   问了就是给冒领者送分：他翻一眼列表就知道该选哪项。
+   *   改模板前先对照上面那份白名单。
    */
   LF.QUESTION_TEMPLATES = {
     card: [
       { type: 'judge', stem: '卡面上有贴纸、签名或其他人为做的标记' },
-      { type: 'choice', stem: '卡主所在的年级是', options: ['大一', '大二', '大三', '大四'] }
-    ],
-    key: [
-      { type: 'judge', stem: '钥匙上挂着挂件或装饰' },
-      { type: 'choice', stem: '这一串钥匙的用途是', options: ['宿舍钥匙', '车钥匙', '柜子钥匙', '其他'] }
+      { type: 'choice', stem: '卡套的样子是', options: ['透明卡套', '带图案的卡套', '卡套背面贴了东西', '没有卡套'] }
     ],
     headphone: [
       { type: 'judge', stem: '充电盒或耳机上有贴纸、明显划痕' },
-      { type: 'choice', stem: '耳机的品牌是', options: ['苹果', '华为', '小米', '索尼'] }
+      { type: 'choice', stem: '充电盒的磨损情况是', options: ['几乎全新', '有轻微划痕', '有明显磕碰', '盒盖有点松'] }
     ],
     umbrella: [
-      { type: 'judge', stem: '伞面是纯色、没有花纹' },
-      { type: 'choice', stem: '伞柄的样子是', options: ['直柄', '弯柄', '自动伸缩', '折叠短柄'] }
-    ],
-    book: [
-      { type: 'judge', stem: '书的扉页或内页写有名字' },
-      { type: 'choice', stem: '书里的笔记主要用什么颜色标注', options: ['黑色', '红色', '蓝色', '荧光黄'] }
+      { type: 'judge', stem: '伞骨内侧有生锈的痕迹' },
+      { type: 'choice', stem: '伞面上最特别的细节是', options: ['印着校徽或字样', '有卡通或碎花图案', '有一道划痕或破损', '没有特别图案'] }
     ],
     cup: [
       { type: 'judge', stem: '杯身贴着贴纸或印有图案' },
-      { type: 'choice', stem: '杯子的主要颜色是', options: ['白色', '黑色', '蓝色', '粉色'] }
+      { type: 'choice', stem: '杯盖的样子是', options: ['带吸管', '翻盖式', '旋盖式', '没有杯盖'] }
     ],
     electronics: [
       { type: 'judge', stem: '设备上有明显的划痕或磕碰' },
@@ -128,7 +192,7 @@
     ],
     glasses: [
       { type: 'judge', stem: '镜片有明显的厚度或特殊镀膜' },
-      { type: 'choice', stem: '镜框的材质看起来是', options: ['塑料', '金属', '半框', '无框'] }
+      { type: 'choice', stem: '镜腿上的细节是', options: ['印着品牌字样', '缠着透明胶带', '有明显划痕', '没有特别之处'] }
     ],
     other: [
       { type: 'judge', stem: '物品上有一眼能认出的个人标记' },
@@ -155,6 +219,33 @@
     stemMax: 60,            // 题干最长字数
     optionMax: 16           // 单个选项最长字数
   };
+
+  /**
+   * 易混词组：同一组里的说法，认领者常常分不清该选哪个。
+   *
+   * 这不是同义词表，而是"会让真失主自己选错"的说法。最典型的是颜色：
+   * 发布者把「深蓝色」和「藏青」当成两个选项，东西明明是藏青色的同学，
+   * 看见「深蓝色」也会觉得说的就是自己那件，随手就选错了——
+   * 这等于把第一版"自由文本判不准"的老毛病搬到了选项里，必须拦下来。
+   *
+   * 组怎么划分（匹配算法见 store.js 的 confusableOptionPair）：
+   *   - 一个说法只归一组，取命中的**最长**那个词，所以「深蓝色」落在第一组、
+   *     「浅蓝色」落在第二组，深蓝和浅蓝是两种能分清的颜色，不会被误判成同一色；
+   *   - 浅色系与深色系刻意分开，同一个色系里的深浅两档（深蓝 / 浅蓝）不算易混。
+   */
+  LF.CONFUSABLE_GROUPS = [
+    ['蓝色', '深蓝', '深蓝色', '藏青', '藏蓝色', '靛蓝', '宝蓝', '宝蓝色'],
+    ['浅蓝', '浅蓝色', '淡蓝', '淡蓝色', '天蓝', '天蓝色', '湖蓝', '湖蓝色'],
+    ['绿色', '深绿', '深绿色', '墨绿', '墨绿色', '军绿', '军绿色', '橄榄绿'],
+    ['浅绿', '浅绿色', '草绿', '草绿色', '薄荷绿', '苹果绿'],
+    ['红色', '深红', '深红色', '暗红', '暗红色', '酒红', '酒红色', '砖红', '枣红'],
+    ['粉色', '粉红', '粉红色', '浅红', '浅红色', '淡粉', '藕粉'],
+    ['白色', '纯白', '纯白色', '雪白', '米白', '米白色', '米色', '奶白', '奶白色', '象牙白', '杏色', '米黄', '米黄色'],
+    ['黑色', '纯黑', '炭黑', '墨色'],
+    ['灰色', '深灰', '深灰色', '浅灰', '浅灰色', '银灰', '银灰色', '银色'],
+    ['棕色', '咖色', '咖啡色', '褐色', '深棕', '卡其', '卡其色'],
+    ['紫色', '深紫', '深紫色', '浅紫', '浅紫色', '紫罗兰', '香芋紫']
+  ];
 
   /** 申诉（3 次全败后的人工审核通道）。 */
   LF.APPEAL = {
@@ -199,6 +290,26 @@
   /** 某个分类可用的出题模板。 */
   LF.templatesFor = function (categoryKey) {
     return LF.QUESTION_TEMPLATES[categoryKey] || LF.QUESTION_TEMPLATES.other;
+  };
+
+  /**
+   * 某个分类的公开特征定义。
+   * 没有定义的分类（目前只有 other，以及任何脏数据里的未知分类）返回空数组，
+   * 调用方据此决定"要不要显示特征区、要不要保留描述框"——所以**别返回 null**。
+   */
+  LF.featuresFor = function (categoryKey) {
+    return LF.FEATURES[categoryKey] || [];
+  };
+
+  /** 某个分类的特征键列表，数据层清洗 features 对象时用。 */
+  LF.featureKeysFor = function (categoryKey) {
+    return LF.featuresFor(categoryKey).map(function (item) { return item.key; });
+  };
+
+  /** 按分类 + 特征键取单条定义，找不到返回 null。 */
+  LF.featureOf = function (categoryKey, featureKey) {
+    var list = LF.featuresFor(categoryKey);
+    return LF.findBy(list, featureKey);
   };
 
   /** 题型字典查询。 */

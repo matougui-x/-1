@@ -182,6 +182,15 @@
       errors.category = '请选择物品分类';
     }
 
+    // 公开特征：非「其他」分类必填，取值必须是字典里的（见 config.js 的 LF.FEATURES）。
+    // ★ allowEmptyFeatures 是给"非表单"的写操作留的口子：markDone / reopen 走的是
+    //   store.update，patch 里根本没有 features。要是这里无条件必填，老信息就再也
+    //   标记不了"已找到"——报的还是一个用户没法修的字段错（按钮不在表单里）。
+    //   所以只有调用方**主动提交了 features** 时才校验，跟 allowEmptyQuestions 一个思路。
+    if (!opts.allowEmptyFeatures) {
+      checkFeatures(data.category, normalizeFeatures(data.category, data.features), errors);
+    }
+
     // 地点区域
     if (LF.fields(LF.AREAS).indexOf(data.area) === -1) {
       errors.area = '请选择所在区域';
@@ -305,6 +314,256 @@
     return out;
   }
 
+  /**
+   * 一个说法归属哪一组易混词（返回组下标，不属于任何一组返回 null）。
+   *
+   * ★ 取命中的**最长**那个词，长词优先。这一步不能省：
+   *   「浅蓝色」既含「浅蓝色」（第二组）也含「蓝色」（第一组），
+   *   不比较长度就会归到第一组，于是「深蓝色」和「浅蓝色」被错判成同一色。
+   */
+  function confusableGroupOf(term) {
+    var text = U.normalizeText(term);
+    if (!text) return null;
+
+    var groups = LF.CONFUSABLE_GROUPS || [];
+    var best = null;
+
+    for (var g = 0; g < groups.length; g++) {
+      for (var k = 0; k < groups[g].length; k++) {
+        var word = U.normalizeText(groups[g][k]);
+        if (word && text.indexOf(word) !== -1 && (!best || word.length > best.length)) {
+          best = { group: g, length: word.length };
+        }
+      }
+    }
+
+    return best ? best.group : null;
+  }
+
+  /** 一个说法是不是另一个的子串。被包含的那个至少 2 个字，免得「1」和「12」被当成易混。 */
+  function isSubstringPair(a, b) {
+    var x = U.normalizeText(a);
+    var y = U.normalizeText(b);
+    if (!x || !y || x === y) return false;
+
+    var shorter = x.length <= y.length ? x : y;
+    var longer = x.length <= y.length ? y : x;
+    return shorter.length >= 2 && longer.indexOf(shorter) !== -1;
+  }
+
+  /**
+   * 找出选择题里两个"认领者分不清该选哪个"的选项，没问题返回 null。
+   *
+   * 两种能机械识别的毛病：
+   *   1. 两个选项属于同一组易混词（「深蓝色」和「藏青」）；
+   *   2. 一个选项包含了另一个（「深蓝」和「深蓝色」、「图书馆」和「图书馆一楼」）。
+   *
+   * ★ 顺序有讲究：两个选项**都**能在易混词组里找到归属时，一律以词组表为准，
+   *   不再退回子串判断。否则「蓝色」和「浅蓝色」会被子串规则误伤——
+   *   它们分属两个色系，本来就是失主分得清的说法。
+   *
+   * 页面拿它做实时提示，checkQuestions 拿它做发布拦截。
+   */
+  LF.confusableOptionPair = function (options) {
+    var list = (Array.isArray(options) ? options : []).map(function (item) {
+      return U.clean(item);
+    });
+    var groups = list.map(confusableGroupOf);
+
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i]) continue;
+      for (var j = i + 1; j < list.length; j++) {
+        if (!list[j]) continue;
+
+        if (groups[i] !== null && groups[j] !== null) {
+          if (groups[i] === groups[j]) return { a: list[i], b: list[j], reason: 'group' };
+          continue;                       // 两种能分清的颜色，放行
+        }
+        if (isSubstringPair(list[i], list[j])) {
+          return { a: list[i], b: list[j], reason: 'substring' };
+        }
+      }
+    }
+    return null;
+  };
+
+  /**
+   * 公开特征在表单里的字段名。加 `feat_` 前缀是为了和 title / category / area
+   * 这些既有字段名彻底隔开——ui.showFieldErrors 靠"错误键 === data-field 属性"
+   * 定位到输入框（见 ui.js 的 showFieldErrors），撞名会把报错挂到别的字段上。
+   */
+  function featureFieldName(featureKey) {
+    return 'feat_' + featureKey;
+  }
+
+  LF.featureFieldName = featureFieldName;
+
+  /**
+   * 把任意形态的 features 输入整理成规范结构。
+   *
+   * 只保留**当前分类**定义过的键，值一律 U.clean 过，白名单外的键直接丢掉。
+   * ★ 这一步同时保证了"换分类不残留"：一条信息从「电子产品」改成「雨伞」，
+   *   原来的 brand/model 不会被带过去，只剩雨伞定义的 color/handle。
+   *   写入路径（create 与 update）都必须走这里，别无第二处。
+   *
+   * `other` 分类在字典里没有定义，于是得到 `{}`——它不是漏洞，是唯一的兜底分类，
+   * 那一类靠保留自由描述框来承载信息。
+   */
+  function normalizeFeatures(categoryKey, input) {
+    var data = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+    var out = {};
+
+    LF.featuresFor(categoryKey).forEach(function (def) {
+      out[def.key] = U.clean(data[def.key]);
+    });
+
+    return out;
+  }
+
+  LF.normalizeFeatures = normalizeFeatures;
+
+  /** 一条信息所有公开特征的值（不含键）。搜索匹配与展示都用它。 */
+  function featureValues(post) {
+    var features = post && post.features;
+    if (!features || typeof features !== 'object') return [];
+
+    var out = [];
+    for (var key in features) {
+      if (Object.prototype.hasOwnProperty.call(features, key) && features[key]) {
+        out.push(features[key]);
+      }
+    }
+    return out;
+  }
+
+  LF.featureValues = featureValues;
+
+  /**
+   * 参与**普通子串**匹配的特征值，即排除掉通配型（打码卡号）。
+   *
+   * ★ 必须排除。打码卡号一旦留在关键词用的 haystack 里，`indexOf` 会让
+   *   「搜 350504」命中 `350504************`，位数一致这条规矩就被绕过去了。
+   *   打码卡号一律只走 matchesWildcard 那一关。
+   */
+  function plainFeatureValues(post) {
+    var features = post && post.features;
+    if (!features || typeof features !== 'object') return [];
+
+    return LF.featuresFor(post.category).filter(function (def) {
+      return !def.wildcard;
+    }).map(function (def) {
+      return features[def.key];
+    }).filter(function (value) {
+      return !!value;
+    });
+  }
+
+  /**
+   * 逐个特征校验，把错误写进 errors（键名是 feat_<key>）。
+   *
+   * 只有字典里定义过特征的分类才要求填写，所以 other 和未知分类天然豁免。
+   * 这也是"一刀切"落在数据层的那一刀：非兜底分类**必须有**公开特征，
+   * 因为它已经没有自由描述可以依靠了。
+   */
+  function checkFeatures(categoryKey, features, errors) {
+    LF.featuresFor(categoryKey).forEach(function (def) {
+      var field = featureFieldName(def.key);
+      var value = features[def.key];
+
+      if (!value) {
+        errors[field] = (def.kind === 'select' ? '请选择' : '请填写') + def.name;
+        return;
+      }
+
+      // 选项是写死的白名单：失主筛选和搜索都靠取值一致，不能让它变成自由文本
+      if (def.kind === 'select' && def.options.indexOf(value) === -1) {
+        errors[field] = def.name + '只能从给出的选项里选一个';
+        return;
+      }
+
+      if (def.kind === 'text') {
+        // 先查字符集再查长度：填了字母时，"只能填数字"比"位数不够"有用得多
+        if (def.pattern && !def.pattern.test(value)) {
+          errors[field] = def.name + def.format;
+          return;
+        }
+        if (def.minLen && value.length < def.minLen) {
+          errors[field] = def.name + '至少要写满 ' + def.minLen + ' 位';
+          return;
+        }
+        if (def.maxLen && value.length > def.maxLen) {
+          errors[field] = def.name + '不能超过 ' + def.maxLen + ' 位';
+          return;
+        }
+        if (def.maxDigits) checkDigitReveal(def, value, field, errors);
+      }
+    });
+  }
+
+  /**
+   * 打码位数检查：卡号这类"要写满总位数、但只许露出少数几位"的字段。
+   *
+   * 露出的位数直接决定这条信息的价值——
+   *   - 一位都不写：失主没法核对，等于没提供线索；
+   *   - 写满 18 位：证件号直接公开了。
+   * 上下两头都要拦。总位数本身仍然保留（不足的位置用 * 占着），
+   * 因为"号码是 18 位"本身就是一条失主用得上的线索。
+   */
+  function checkDigitReveal(def, value, field, errors) {
+    var revealed = (value.match(/[0-9]/g) || []).length;
+
+    if (revealed === 0) {
+      errors[field] = def.name + '至少要写出 1 位数字，否则失主没法核对';
+      return;
+    }
+    if (revealed > def.maxDigits) {
+      errors[field] = def.name + '最多只能写出 ' + def.maxDigits + ' 位数字（现在写了 ' +
+        revealed + ' 位），其余位置请用 * 代替';
+    }
+  }
+
+  /** 一条信息里所有"通配型"特征值（卡号那种带 * 的）。 */
+  function wildcardFeatureValues(post) {
+    var features = post && post.features;
+    if (!features || typeof features !== 'object') return [];
+
+    return LF.featuresFor(post.category).filter(function (def) {
+      return def.wildcard;
+    }).map(function (def) {
+      return U.normalizeText(features[def.key]);
+    }).filter(function (value) {
+      return value !== '';
+    });
+  }
+
+  /**
+   * 通配匹配：模式串里的 * 代表任意数字，搜索词**位数必须与模式完全一致**。
+   *
+   * 信息里存 `350504************`（18 位），失主这样搜都算命中：
+   *   350504200510291653     写满，报出全部数字
+   *   35050420**********     写满，中间不记得的用 * 顶
+   *   350504**********1653   写满，只记得头尾
+   *
+   * 为什么非要位数一致：搜索词里也会出现 *，只有位数对齐了，
+   * "哪几位是我记得的、哪几位是我瞎填的"才没有歧义。允许短的话，
+   * `350504200` 到底是"前 9 位"还是"前 6 位 + 后 3 位"就说不清了。
+   *
+   * ★ * 在**两边**都成立：模式里是 * 表示拾得者没露这一位，
+   *   搜索词里是 * 表示失主不记得这一位，任意一边是 * 这一位就算过。
+   */
+  LF.matchesWildcard = function (pattern, term) {
+    if (!pattern || !term) return false;
+    if (term.length !== pattern.length) return false;   // 多一位少一位都不算
+
+    for (var i = 0; i < term.length; i++) {
+      var expected = pattern.charAt(i);
+      var actual = term.charAt(i);
+      if (expected === '*' || actual === '*' || expected === actual) continue;
+      return false;
+    }
+    return true;
+  };
+
   /** 逐题校验，返回第一条错误提示（没有错误返回空串）。 */
   function checkQuestions(list) {
     var V = LF.VERIFY;
@@ -332,6 +591,15 @@
         if (q.options.indexOf(q.options[j]) !== j) {
           return no + '有重复的选项，认领者没法区分';
         }
+      }
+
+      // 选项之间要差别明显：含糊的选项会把"判不准"从答案搬到选项上，
+      // 真正的失主看见两个意思接近的说法，会选错、然后被系统判成冒领的人
+      var confusable = LF.confusableOptionPair(q.options);
+      if (confusable) {
+        var why = confusable.reason === 'substring' ? '一个包含了另一个' : '意思太接近';
+        return no + '的「' + confusable.a + '」和「' + confusable.b + '」' + why +
+          '，真正的失主也可能选错，请改成差别明显的说法';
       }
 
       if (q.answer < 0 || q.answer >= q.options.length) return no + '还没有指定正确答案';
@@ -413,6 +681,14 @@
     }
     if (!Array.isArray(post.claims)) { post.claims = []; changed = true; }
     if (!Array.isArray(post.appeals)) { post.appeals = []; changed = true; }
+
+    // v2 → v3：公开特征改成按分类锁定的结构。老记录没有这个字段，
+    // 就地补一个空对象，页面拿到的是 {} 而不是 undefined，省掉满地的判空。
+    // 空特征意味着"这条信息还没补上公开特征"，编辑时会被强制补齐。
+    if (!post.features || typeof post.features !== 'object' || Array.isArray(post.features)) {
+      post.features = {};
+      changed = true;
+    }
     if ('revealMode' in post) { delete post.revealMode; changed = true; }
     if ('pendingClaim' in post) { delete post.pendingClaim; changed = true; }
 
@@ -539,13 +815,19 @@
 
   /**
    * 关键词匹配：空格分隔的多个词之间是"与"的关系，每个词只要命中
-   * 物品名 / 描述 / 地点 / 分类名 / 区域名 任意一处就算命中。
+   * 物品名 / 描述 / 地点 / 分类名 / 区域名 / 公开特征值 任意一处就算命中。
    * 归一化后比较，所以"校园卡"和"校园卡 "、"ABC"和"abc"结果一致。
+   *
+   * 打码的卡号是特例：存的是 `350504************` 这种带 * 的形式，
+   * 走普通子串匹配的话失主搜自己的完整号码反而搜不到，所以额外走一遍通配匹配
+   * （见 LF.matchesWildcard）。
    */
   LF.matchKeyword = function (post, keyword) {
     var terms = U.normalizeText(keyword).split(' ').filter(function (t) { return t !== ''; });
     if (!terms.length) return true;
 
+    // 公开特征的值要一起参与匹配，否则"搜华为"找不到那条华为耳机——
+    // 而让失主搜得到，正是把这些字段锁成固定取值的意义所在
     var haystack = U.normalizeText([
       post.title,
       post.description,
@@ -554,10 +836,20 @@
       LF.areaOf(post.area).name,
       LF.typeOf(post.type).name,
       maskName(post.contactName)
-    ].join(' '));
+    ].concat(plainFeatureValues(post)).join(' '));
+
+    var wildcards = wildcardFeatureValues(post);
 
     for (var i = 0; i < terms.length; i++) {
-      if (haystack.indexOf(terms[i]) === -1) return false;
+      if (haystack.indexOf(terms[i]) !== -1) continue;
+
+      // 普通子串没命中，再看能不能落进通配型特征（打码的卡号）：
+      // 信息里存的是 350504************，失主搜完整的身份证号也要能命中
+      var hit = false;
+      for (var w = 0; w < wildcards.length; w++) {
+        if (LF.matchesWildcard(wildcards[w], terms[i])) { hit = true; break; }
+      }
+      if (!hit) return false;
     }
     return true;
   };
@@ -570,6 +862,26 @@
 
   LF.SORTERS = SORTERS;
 
+  /**
+   * 特征筛选：wanted 形如 `{ brand: '华为', color: 'all' }`，
+   * 空值或 'all' 表示这一项不限，其余逐项精确匹配（全中才算命中）。
+   *
+   * 精确匹配是有意的：特征取值本来就是固定白名单，用模糊匹配只会让
+   * "选了黑色却搜出深灰色"这种事发生，失主反而更找不着。
+   */
+  function matchFeatures(post, wanted) {
+    if (!wanted) return true;
+
+    for (var key in wanted) {
+      if (!Object.prototype.hasOwnProperty.call(wanted, key)) continue;
+      if (!wanted[key] || wanted[key] === 'all') continue;
+      if (!post.features || post.features[key] !== wanted[key]) return false;
+    }
+    return true;
+  }
+
+  LF.matchFeatures = matchFeatures;
+
   /** 在一批数据上执行筛选 + 排序，返回内部对象数组（调用方再决定要不要 toPublic）。 */
   LF.queryPosts = function (posts, query) {
     var q = query || {};
@@ -580,6 +892,7 @@
       if (q.status && q.status !== 'all' && post.status !== q.status) return false;
       if (q.ownerId && post.ownerId !== q.ownerId) return false;
       if (q.excludeId && post.id === q.excludeId) return false;
+      if (q.features && !matchFeatures(post, q.features)) return false;
       if (q.keyword && !LF.matchKeyword(post, q.keyword)) return false;
       return true;
     });
@@ -798,7 +1111,11 @@
         area: data.area,
         location: U.clean(data.location),
         happenedAt: U.parseTime(data.happenedAt).toISOString(),
-        description: U.clean(data.description),
+        // 锁死了公开特征的分类不再保留自由描述——那条 300 字的口子正是特征泄漏的来源
+        // （演示数据里就出现过"描述写了伞柄有划痕、验证题正好问划痕"）。
+        // 只有兜底的「其他」分类还留描述框，所以这里按"该分类有没有特征定义"来判。
+        description: LF.featuresFor(data.category).length ? '' : U.clean(data.description),
+        features: normalizeFeatures(data.category, data.features),
         photos: (data.photos || []).slice(0, U.IMAGE_RULES.maxCount),
         contactName: U.clean(data.contactName),
         contactDept: U.clean(data.contactDept),
@@ -858,13 +1175,20 @@
 
         var check = LF.validatePost(merged, {
           now: now(),
-          allowEmptyQuestions: wasLegacy       // 旧信息允许先只改标题，验证题留待以后补
+          allowEmptyQuestions: wasLegacy,      // 旧信息允许先只改标题，验证题留待以后补
+          // 只有当 patch 真的带了 features（发布页提交表单）才要求必填。
+          // markDone / reopen 这类状态流转不带这个键，不该被特征校验拦住。
+          allowEmptyFeatures: !Object.prototype.hasOwnProperty.call(patch, 'features')
         });
         if (!check.ok) return { ok: false, errors: check.errors };
 
         merged.title = U.clean(merged.title);
         merged.location = U.clean(merged.location);
-        merged.description = U.clean(merged.description);
+        merged.description = LF.featuresFor(merged.category).length ? '' : U.clean(merged.description);
+        // ★ 按**新**分类重建整个 features，而不是把 patch 盖上去：
+        //   store.update 是浅合并，直接盖的话，从「电子产品」改成「雨伞」后，
+        //   原来的 brand/model 会留在存储里，变成一个分类对不上的幽灵字段。
+        merged.features = normalizeFeatures(merged.category, merged.features);
         merged.contactName = U.clean(merged.contactName);
         merged.contactDept = U.clean(merged.contactDept);
         merged.contactWay = U.clean(merged.contactWay);

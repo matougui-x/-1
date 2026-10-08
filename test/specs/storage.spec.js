@@ -102,6 +102,43 @@ describe('存储适配器与容错', function () {
         assert.include(LF.fields(LF.TYPES), post.type, post.title);
       });
     });
+
+    /**
+     * 演示数据是最容易被忘掉的一环：seed.js 的 post() 是个白名单构造函数，
+     * 漏了 features 那一行不会报任何错，页面上只是"特征行不见了"。
+     */
+    it('演示数据的公开特征必须齐全、取值合法，且不能有多余字段', function () {
+      var posts = LF.buildSeedPosts(new Date('2026-10-02T10:00:00'), 'me_x');
+
+      posts.forEach(function (post) {
+        var defs = LF.featuresFor(post.category);
+
+        defs.forEach(function (def) {
+          var value = post.features ? post.features[def.key] : '';
+          assert.notStrictEqual(value, '', post.title + ' 缺少公开特征：' + def.key);
+          if (def.kind === 'select') {
+            assert.include(def.options, value,
+              post.title + ' 的 ' + def.key + ' 取值「' + value + '」不在字典选项里');
+          }
+          if (def.kind === 'text' && def.pattern) {
+            assert.match(value, def.pattern, post.title + ' 的 ' + def.key + ' 格式不对');
+          }
+        });
+
+        assert.lengthOf(LF.featureValues(post), defs.length,
+          post.title + ' 出现了字典里没定义的特征字段（换分类后的残留？）');
+      });
+    });
+
+    it('锁了公开特征的分类，演示数据里不再留自由描述', function () {
+      var posts = LF.buildSeedPosts(new Date('2026-10-02T10:00:00'), 'me_x');
+
+      posts.forEach(function (post) {
+        if (!LF.featuresFor(post.category).length) return;   // 「其他」保留描述
+        assert.strictEqual(post.description, '',
+          post.title + ' 属于锁死特征的分类，公开描述应当留空');
+      });
+    });
   });
 
   describe('脏数据容错', function () {
