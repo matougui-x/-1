@@ -134,7 +134,7 @@
   }
 
   function lockboxHtml(post) {
-    if (!post.needVerify) return '';
+    if (!post.needVerify) return trustBoxHtml(post);
     var mix = post.questionMix;
     return '<div class="lockbox mt-12">' +
       '<span class="ic">🔒</span>' +
@@ -142,6 +142,24 @@
       ' 道 · 选择题 ' + mix.choice + ' 道）。' +
       '<span class="lk">认领人需要一次性答完全部题目，全部答对才会显示发布者的联系方式并生成认领凭证；' +
       '最多答 ' + LF.VERIFY.maxAttempts + ' 次，3 次都没答对可以提交申诉走人工审核。</span></span>' +
+      '</div>';
+  }
+
+  /**
+   * 「其他」类招领的信任模式说明。
+   *
+   * ★ 这一类没有验证题（见 store.js 的 LF.allowVerifyFor），联系方式是**直接公开**的。
+   *   页面必须把这件事说出来：否则认领人会以为"没让我答题"是页面出错了，
+   *   或者反过来把公开的描述当成已经核对过的凭证。同一条规则，发布页也讲了一遍。
+   */
+  function trustBoxHtml(post) {
+    if (post.type !== 'found' || LF.allowVerifyFor(post.category)) return '';
+    return '<div class="lockbox mt-12">' +
+      '<span class="ic">🤝</span>' +
+      '<span>这一类没有认领验证题（<b>信任原则</b>）：' + esc(post.categoryName) +
+      '类的物品说不清固定特征，所以描述和照片是直接公开的，联系方式也直接可见。' +
+      '<span class="lk">交接前请和发布者核对只有物主知道的细节（书里的签名、钥匙串的数量等），' +
+      '别只凭公开描述就认领。</span></span>' +
       '</div>';
   }
 

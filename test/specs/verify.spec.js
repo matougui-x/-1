@@ -67,6 +67,24 @@ describe('认领验证（客观题 + 限制次数）', function () {
       assert.match(start.message, /不需要验证/);
     });
 
+    it('「其他」类的招领也不出题、不能发起认领（信任原则）', function () {
+      var store = T.makeStore();
+      var post = T.publishFound(store, OWNER, {
+        category: 'other',
+        features: {},
+        description: '钥匙串上有蓝色编织挂绳，一共三把。',
+        questions: []
+      });
+
+      var start = store.startClaim(post.id);
+      assert.isFalse(start.ok, '「其他」类没有题目，认领入口不该开着');
+      assert.match(start.message, /不需要验证/);
+
+      var submit = store.submitClaim(post.id, T.answers());
+      assert.isFalse(submit.ok);
+      assert.match(submit.message, /不需要验证/);
+    });
+
     it('已完成的信息不能再认领', function () {
       var ctx = makeVerifyStore();
       ctx.store.markDone(ctx.post.id, OWNER);

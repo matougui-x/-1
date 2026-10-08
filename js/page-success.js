@@ -57,8 +57,23 @@
       '</div>'
     : '';
 
+  // 「其他」类招领：没有验证题，联系方式直接公开。必须说出来，
+  // 否则发布者会以为是自己漏填了出题区（见 store.js 的 LF.allowVerifyFor）。
+  if (post.type === 'found' && !LF.allowVerifyFor(post.category)) {
+    protectedTip =
+      '<div class="lockbox mt-16">' +
+        '<span class="ic">🤝</span>' +
+        '<span>这一类<strong>不设认领验证题</strong>（信任原则）：' + esc(post.categoryName) +
+        '类的物品说不清固定特征，所以你的描述和照片是直接公开的，联系方式也直接可见。' +
+        '<span class="lk">别忘了把只有物主知道的细节留在描述之外——对方联系你时用它来核对，' +
+        '那才是防冒领的最后一道关。</span></span>' +
+      '</div>';
+  }
+
   var nextStep = post.type === 'found'
-    ? '有人认领时，先看他有没有答对全部验证题，再约定地点交接；物归原主后记得回来把状态标记为「已归还」。'
+    ? (post.needVerify
+        ? '有人认领时，先看他有没有答对全部验证题，再约定地点交接；物归原主后记得回来把状态标记为「已归还」。'
+        : '有人联系你时，先用只有物主才知道的细节核对一下再约定地点交接；物归原主后记得回来把状态标记为「已归还」。')
     : '有人联系你说捡到了，同样建议先核对物品特征；东西找回来之后记得把状态标记为「已找到」，别人就不会再重复联系你了。';
 
   contentEl.innerHTML =
@@ -72,7 +87,8 @@
       '<div class="section-head"><h2>公开展示的信息预览</h2></div>' +
       ui.cardHtml(post, { timePrefix: false }) +
       '<p class="text-small text-muted mt-12">其他同学在首页和搜索结果里看到的就是这张卡片，' +
-      '点进去可以看到公开特征和地点。你写在验证题里的答案不会显示出来。</p>' +
+      '点进去可以看到公开特征和地点。' +
+      (post.needVerify ? '你写在验证题里的答案不会显示出来。' : '') + '</p>' +
     '</div>' +
 
     protectedTip +

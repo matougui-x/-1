@@ -120,6 +120,10 @@
         </div>
       </div>
 
+      <!-- 「其他」分类的信任模式说明：这一类不出验证题，文案由 JS 填（见 applyType）。
+           和上面的出题区互斥：出题区显示时这一条隐藏，反之亦然。 -->
+      <div class="lockbox" id="verifyHint" role="status" hidden></div>
+
       <!-- ============ 照片与联系方式 ============ -->
       <div class="form-section">
         <div class="form-section-title">照片与联系方式</div>
@@ -129,7 +133,7 @@
           <div class="photo-grid" id="photoGrid"></div>
           <input type="file" id="photoInput" accept="image/*" multiple hidden>
           <div class="field-error"></div>
-          <div class="field-hint">照片会公开展示，请不要拍到学号、姓名等只有物主知道的细节。图片会自动压缩后保存在本地。</div>
+          <div class="field-hint">照片会公开展示，请不要拍到学号、姓名等只有物主知道的细节（「其他」类没有验证题，这些细节就是唯一的凭据）。图片会自动压缩后保存在本地。</div>
         </div>
 
         <div class="field" data-field="contactName">
@@ -149,7 +153,7 @@
           <label class="field-label" for="fContactWay">联系方式<span class="req">*</span></label>
           <input class="input" id="fContactWay" name="contactWay" maxlength="60" placeholder="例如：微信：zhangmy2023">
           <div class="field-error"></div>
-          <div class="field-hint">建议填微信或 QQ，写清是哪种。招领信息出了验证题之后，这里只对答对全部题目的人显示。</div>
+          <div class="field-hint">建议填微信或 QQ，写清是哪种。出了验证题的招领信息，这里只对答对全部题目的人显示；「其他」类不出题，会直接显示。</div>
         </div>
       </div>
 

@@ -517,6 +517,174 @@ describe('发布表单校验 validatePost', function () {
     });
   });
 
+  /**
+   * 搜索引导：特征被锁成一两项之后，失主只有知道"该搜什么"才找得到东西。
+   * 引导语写在 LF.CATEGORIES 的 searchHint 里，字段名却在 LF.FEATURES 里——
+   * 两份数据、两个地方，最容易出的岔子就是改了字段名忘了改引导语，
+   * 于是失主照着一条过时的提示去搜（见 config.js 里 LF.searchHintFor 的说明）。
+   * 下面几条把这份一致性变成会失败的测试。
+   *
+   * ★ 「其他」不在"必须有引导语"这条规矩的豁免名单里：它是**对照组**，
+   *   流程完全不同（不出题、描述直接公开），所以它也有引导语，只是内容不同。
+   */
+  describe('搜索引导：每个分类都要告诉失主该搜什么', function () {
+    /** 有公开特征的分类——正是"一刀切"切到的那些。 */
+    function restricted() {
+      return LF.fields(LF.CATEGORIES).filter(function (key) {
+        return LF.featureKeysFor(key).length > 0;
+      });
+    }
+
+    it('每个分类都有引导语，一个都不能少', function () {
+      var withoutHint = LF.fields(LF.CATEGORIES).filter(function (key) {
+        return LF.utils.clean(LF.categoryOf(key).searchHint) === '';
+      });
+      assert.deepEqual(withoutHint, [], '这些分类还没写 searchHint：' + withoutHint.join('、'));
+    });
+
+    it('引导语要出现"搜"，不能只是句介绍', function () {
+      restricted().forEach(function (key) {
+        var text = LF.searchHintFor(key);
+        assert.include(text, '搜', key + ' 的引导语没有告诉失主该"搜"什么：' + text);
+      });
+    });
+
+    it('引导语要讲清"搜不到什么"，否则失主会以为东西没被捡到', function () {
+      restricted().forEach(function (key) {
+        var text = LF.searchHintFor(key);
+        assert.isTrue(/不公开|不在公开|搜不到/.test(text),
+          key + ' 的引导语没说清哪些内容搜不到：' + text);
+      });
+    });
+
+    it('引导语里提到的字段名必须和特征字典对得上', function () {
+      restricted().forEach(function (key) {
+        LF.featuresFor(key).forEach(function (def) {
+          assert.include(LF.searchHintFor(key), def.name,
+            key + ' 的特征名改了，引导语没跟着改：缺「' + def.name + '」');
+        });
+      });
+    });
+
+    it('「其他」也必须给引导语，但讲的是另一件事（翻列表，不是按特征搜）', function () {
+      var text = LF.searchHintFor('other');
+      assert.notStrictEqual(text, '', '「其他」是对照组，不能默默什么都不显示');
+      assert.isTrue(/翻|列表|地点/.test(text),
+        '「其他」没有特征可筛，引导语要告诉失主换个找法：' + text);
+      // 它没有公开特征，所以不能给自己加"就是全部可搜的公开特征"这句收尾
+      assert.strictEqual(LF.featureKeysFor('other').length, 0);
+      assert.notInclude(text, LF.SEARCH_HINT_SUFFIX, '「其他」没有公开特征，别说成有：' + text);
+    });
+
+    it('没有特征定义的分类不列特征名，未知分类干脆不显示引导语', function () {
+      assert.strictEqual(LF.featureNamesFor('other'), '');
+      assert.strictEqual(LF.featureNamesFor('不存在的分类'), '');
+      assert.strictEqual(LF.searchHintFor('不存在的分类'), '', '未知分类不该凭空冒出引导语');
+    });
+  });
+
+  /**
+   * 「其他」是对照组：没有可锁的公开特征，所以也不出认领验证题，
+   * 靠"描述 + 照片直接公开"的信任原则（见 store.js 的 LF.allowVerifyFor）。
+   * 这几条守住这一类的行为，别让它被"招领必须出题"的老规则重新卡住。
+   */
+  describe('「其他」分类：不走验证题，只看描述', function () {
+    it('「其他」的招领不出题也能通过校验', function () {
+      var result = LF.validatePost(T.validFound({
+        category: 'other',
+        features: {},
+        description: '钥匙串上有一条蓝色编织挂绳，一共三把。',
+        questions: []
+      }), opts);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+      assert.notProperty(result.errors, 'questions');
+    });
+
+    it('其他分类（有公开特征）的招领仍然必须出题', function () {
+      var result = LF.validatePost(T.validFound({ category: 'umbrella', questions: [] }), opts);
+      assert.property(result.errors, 'questions');
+    });
+
+    it('寻物信息即使属于「其他」，也不出题', function () {
+      var result = LF.validatePost(T.validLost({
+        category: 'other',
+        features: {},
+        description: '宿舍钥匙一串，蓝色挂绳。'
+      }), opts);
+      assert.isTrue(result.ok, JSON.stringify(result.errors));
+    });
+
+    it('allowVerifyFor 三态：有特征 true / 其他类 false / 未知分类 null', function () {
+      assert.isTrue(LF.allowVerifyFor('card'));
+      assert.isTrue(LF.allowVerifyFor('electronics'));
+      assert.isFalse(LF.allowVerifyFor('other'), '「其他」不出题');
+      assert.isNull(LF.allowVerifyFor('不存在的分类'), '未知分类无从谈起，返回 null');
+    });
+
+    it('发布时即使带了题目，「其他」类也会把题目丢掉', function () {
+      var store = T.makeStore();
+      var created = store.create(T.validFound({
+        category: 'other',
+        features: {},
+        description: '钥匙串上有蓝色编织挂绳，一共三把。',
+        questions: T.questions()          // 前端不该传，但传了也不能让错的数据落盘
+      }), 'u1');
+
+      assert.isTrue(created.ok, JSON.stringify(created.errors));
+      assert.strictEqual(created.post.questionCount, 0);
+      assert.isFalse(created.post.needVerify, '「其他」类的招领不该需要验证');
+      assert.deepEqual(T.rawPost(store, created.post.id).questions, []);
+    });
+
+    it('编辑时把分类改成「其他」，原来那套题会被清掉', function () {
+      var store = T.makeStore();
+      var post = T.publishFound(store, 'u1');          // 默认是证件卡片，带 4 道题
+      assert.strictEqual(T.rawPost(store, post.id).questions.length, 4);
+
+      var updated = store.update(post.id, {
+        category: 'other',
+        features: {},
+        description: '卡套里还有一张借书凭条，卡面贴过贴纸。'
+      }, 'u1');
+
+      assert.isTrue(updated.ok, JSON.stringify(updated.errors));
+      assert.strictEqual(updated.post.questionCount, 0);
+      assert.isFalse(updated.post.needVerify);
+      assert.deepEqual(T.rawPost(store, post.id).questions, [],
+        '换到「其他」后，旧题目不能继续留在存储里');
+    });
+
+    it('旧数据迁移会把「其他」类的历史题目清掉', function () {
+      // 模拟 v3 时代的记录：「其他」类还挂着一组验证题
+      var store = T.makeStore({
+        seed: [{
+          id: 'legacy_other', type: 'found', title: '一本专业书', category: 'other',
+          area: 'library', location: '图书馆二楼自习区',
+          happenedAt: '2026-10-01T09:00:00.000Z',
+          description: '封面磨得比较旧，书里夹着几张草稿纸。',
+          features: {}, photos: [],
+          contactName: '孙浩然', contactDept: '', contactWay: '微信：sunhr2022',
+          status: 'open', doneType: null, doneAt: null,
+          createdAt: 1759300000000, updatedAt: 1759300000000, views: 0,
+          ownerId: 'u1',
+          questions: [
+            { id: 'q1', type: 'judge', stem: '扉页上写的是林小雨这个名字', options: ['正确', '错误'], answer: 0 },
+            { id: 'q2', type: 'judge', stem: '书里的重点用绿色荧光笔标注过', options: ['正确', '错误'], answer: 0 },
+            { id: 'q3', type: 'choice', stem: '书里夹着的东西是', options: ['一张草稿纸', '一张书签'], answer: 0 }
+          ],
+          claims: [], appeals: [], attemptsLeft: 2
+        }]
+      });
+
+      var post = T.byId(store.list({}), 'legacy_other');
+      assert.strictEqual(post.questionCount, 0, '迁移后不该再有验证题');
+      assert.isFalse(post.needVerify);
+      assert.deepEqual(T.rawPost(store, 'legacy_other').questions, []);
+      assert.strictEqual(T.rawPost(store, 'legacy_other').attemptsLeft, LF.VERIFY.maxAttempts,
+        '题目没了，作答次数也该复位');
+    });
+  });
+
   /** 老记录没有 features。状态流转不能被新的必填校验堵死。 */
   describe('老记录的状态流转', function () {
     /** 一条"上个版本发布的"信息：有描述、没有任何公开特征。 */
@@ -576,10 +744,13 @@ describe('发布表单校验 validatePost', function () {
         contactWay: ''
       }, opts);
       assert.isFalse(result.ok);
-      ['title', 'category', 'area', 'location', 'happenedAt', 'contactName', 'contactWay', 'questions']
+      // questions 不在这一串里：分类是空的（本身已经报错），
+      // "该不该出题"无从判断，再补一条"请至少出 3 道验证题"只是噪音。
+      ['title', 'category', 'area', 'location', 'happenedAt', 'contactName', 'contactWay']
         .forEach(function (field) {
           assert.property(result.errors, field, '应当报出 ' + field);
         });
+      assert.notProperty(result.errors, 'questions');
     });
   });
 });

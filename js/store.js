@@ -137,6 +137,36 @@
       e.code === 22 || e.code === 1014;
   }
 
+  // ================================================================ 哪些分类要出验证题
+
+  /**
+   * 这个分类的招领信息要不要出认领验证题。
+   *
+   * 三态，不是布尔：
+   *   true      有公开特征 → 必须出题（3–5 道客观题），答对才给联系方式；
+   *   false     分类有效但没有公开特征 → 「其他」，走信任原则、不出题；
+   *   null      分类压根不在字典里（脏数据）→ 出不出题无从谈起，
+   *             调用方在 category 字段上已经报了错，别再补一条"请出题"的噪音。
+   *
+   * ★ 「其他」是这个项目里唯一的对照组：它没有可以锁死的公开特征
+   *   （LF.FEATURES 里没定义，所以连特征筛选都没有），出题能问的只有
+   *   "卡片上写了谁的名字"这类细节，而这一类本来就是"说不清特征"的物品——
+   *   书、钥匙、水杯套、耳机盒……硬要出题，出题人只能把描述里的细节再抄一遍，
+   *   等于同一份信息写两次，还容易被冒领者照着公开描述选对。
+   *
+   *   所以这一类走**信任原则**：描述和照片直接公开、不设验证题，
+   *   见到的人直接联系发布者。代价是它没有防冒领闸门，收益是这一类终于有个
+   *   说得通的流程；发布页、详情页、我的发布都会把这一点明确讲出来，不藏着。
+   *
+   * 判定依据是"分类有没有公开特征定义"，与 config.js 的 LF.featuresFor 同源：
+   * 有特征 = 有可核对的客观细节 = 能出题。所有需要判断的地方都调这个函数，
+   * 别在各处手写 category === 'other'——将来真加了第二个"不出题"的分类，只用改这里一处。
+   */
+  LF.allowVerifyFor = function (categoryKey) {
+    if (LF.fields(LF.CATEGORIES).indexOf(categoryKey) === -1) return null;
+    return LF.featuresFor(categoryKey).length > 0;
+  };
+
   // ================================================================ 校验规则
 
   var LIMITS = {
@@ -255,9 +285,15 @@
       errors.contactWay = '联系方式不能超过 ' + LIMITS.contactWayMax + ' 个字';
     }
 
-    // 认领验证题：只有招领需要，3–5 道客观题，每题都必须指定正确答案
+    // 认领验证题：只有"能出题"的招领才需要。见 LF.allowVerifyFor：
+    // 非「其他」分类有公开特征可核对，出题能挡住冒领；「其他」没有可锁的特征，
+    // 走的是信任原则（描述 + 照片直接公开、不出题），所以这一类不校验题目。
+    // ★ 分类**非法**时也跳过（categoryAllowed 为 null）：这时已经在 category 上报了错，
+    //   再补一条"请至少出 3 道验证题"是噪音——用户改了分类，这条报错自己就没了。
+    var categoryAllowed = LF.allowVerifyFor(data.category);
+    if (categoryAllowed === null) categoryAllowed = false;   // 分类本身已报错，不叠加题目噪音
     var questions = normalizeQuestions(data.questions);
-    if (isFound && !(opts.allowEmptyQuestions && questions.length === 0)) {
+    if (categoryAllowed && isFound && !(opts.allowEmptyQuestions && questions.length === 0)) {
       var questionError = checkQuestions(questions);
       if (questionError) errors.questions = questionError;
     }
@@ -651,11 +687,15 @@
   }
 
   /**
-   * 旧数据迁移（DATA_VERSION 1 → 2）。
+   * 旧数据迁移，就地升级到当前 DATA_VERSION。
    *
-   * 第一版的"隐藏特征"是发布者手打的自由文本答案，没法自动变成客观题，
-   * 所以这里只保留公开字段，把验证降级为"关闭"，并记下旧特征的名称，
-   * 由「我的发布」提示发布者重新出题。宁可少一个功能，也不编造答案。
+   * v1 → v2：第一版的"隐藏特征"是发布者手打的自由文本答案，没法自动变成客观题，
+   *   所以只保留公开字段，把验证降级为"关闭"，并记下旧特征的名称，
+   *   由「我的发布」提示发布者重新出题。宁可少一个功能，也不编造答案。
+   * v2 → v3：公开特征改成按分类锁定的结构，老记录补一个空 features。
+   * v3 → v4：「其他」分类改成信任原则、不再出验证题，旧数据里那一类的题目就地清掉。
+   *
+   * 每一步都幂等：迁移过的记录不会再变，所以每次读都跑一遍也没有副作用。
    */
   function migratePost(input) {
     var post = input;
@@ -692,14 +732,34 @@
     if ('revealMode' in post) { delete post.revealMode; changed = true; }
     if ('pendingClaim' in post) { delete post.pendingClaim; changed = true; }
 
+    // v3 → v4：「其他」分类改成信任原则、不再出验证题。
+    // 旧数据里这一类还挂着题目（演示数据 seed_6 就有一组），必须清掉——
+    // 否则它会继续按老规矩要求认领者答题，而发布页已经不再提供题目编辑入口，
+    // 发布者连"删掉这套题"都做不到，就被永久锁在旧流程里了。
+    // 题目没了，attemptsLeft 也就没有意义，一并复位，免得留下一堆读不懂的字段。
+    if (Array.isArray(post.questions) && post.questions.length &&
+        !LF.allowVerifyFor(post.category)) {
+      post.questions = [];
+      post.attemptsLeft = LF.VERIFY.maxAttempts;
+      changed = true;
+    }
+
     return { post: post, changed: changed };
   }
 
   // ================================================================ 公开视图
 
-  /** 招领信息设置了验证题时，非发布者必须答对全部题目才能看到联系方式。 */
+  /**
+   * 招领信息设置了验证题时，非发布者必须答对全部题目才能看到联系方式。
+   *
+   * 两个条件缺一不可：这个分类允许出题（「其他」不出题），并且真的存着完整的题目。
+   * 只看"存没存题目"是不够的——旧数据、以及从别的分类改成「其他」的历史记录里
+   * 可能还留着题目，那些题已经不该生效了（迁移会清掉，但读到脏数据时也不能放行）。
+   */
   function needsVerify(post) {
-    return post.type === 'found' && completeQuestions(post).length > 0;
+    return post.type === 'found' &&
+      LF.allowVerifyFor(post.category) &&
+      completeQuestions(post).length > 0;
   }
 
   LF.needsVerify = needsVerify;
@@ -1127,7 +1187,11 @@
         updatedAt: timestamp,
         views: 0,
         ownerId: actor,
-        questions: data.type === 'found' ? normalizeQuestions(data.questions) : [],
+        // 认领验证题：「其他」分类走信任原则，不出题——所以这里把题目强制清空，
+        // 与 description 那一行同一个道理（表单里收不到的东西，数据层负责拦住）。
+        questions: (data.type === 'found' && LF.allowVerifyFor(data.category))
+          ? normalizeQuestions(data.questions)
+          : [],
         claims: [],
         appeals: [],
         attemptsLeft: LF.VERIFY.maxAttempts
@@ -1193,7 +1257,11 @@
         merged.contactDept = U.clean(merged.contactDept);
         merged.contactWay = U.clean(merged.contactWay);
         merged.happenedAt = U.parseTime(merged.happenedAt).toISOString();
-        merged.questions = merged.type === 'found' ? normalizeQuestions(merged.questions) : [];
+        // 同上：改成「其他」、或者改成寻物时，原来那套题必须一起清掉，
+        // 否则换个分类就凭空多出一组仍然生效的验证题。
+        merged.questions = (merged.type === 'found' && LF.allowVerifyFor(merged.category))
+          ? normalizeQuestions(merged.questions)
+          : [];
 
         // 题目被换掉了，之前失败的那几次不应该继续占用新题的次数
         var before = JSON.stringify(completeQuestions(original));

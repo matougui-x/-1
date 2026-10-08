@@ -154,6 +154,9 @@
     // —— 公开特征筛选（只在选了具体分类时出现）——
     renderFeatureFilters(all);
 
+    // —— 搜索引导（紧跟在特征筛选后面，和它同一份分类状态）——
+    renderSearchHint();
+
     var sideArea = ui.qs('#sideArea');
     sideArea.innerHTML = '';
     sideArea.appendChild(optionButton('全部地点', countBy('area', 'all'),
@@ -301,6 +304,27 @@
     });
 
     mobile.hidden = added === 0;
+  }
+
+  /**
+   * 搜索引导：选中分类时，把"这一类只公开哪几个特征、该按什么搜"讲给失主听。
+   *
+   * ★ 这不是可有可无的装饰，是"一刀切"必须补上的一环。
+   *   特征被锁成固定一两个之后，信息里能命中的只剩标题、地点和这几个特征；
+   *   失主不知道，还是会搜「蓝色充电伞」这种只有描述里才有的词，搜出来 0 条——
+   *   而"0 条结果"和"没人捡到"长得一模一样，他会直接以为东西没被捡到。
+   *
+   * 文案由 LF.searchHintFor 按分类给（写在 config.js 的 LF.CATEGORIES 里）：
+   * 非「其他」讲的是"请按这几个特征搜"，「其他」讲的是"没有特征可筛，翻列表找"。
+   * 两类都有话说，所以这里不做分类判断，拿到的文案为空才隐藏（只有未知分类会为空）。
+   * 桌面端和手机端各有一处元素，同一份文案填两次。
+   */
+  function renderSearchHint() {
+    var text = LF.searchHintFor(state.category);
+    [ui.qs('#sideSearchHint'), ui.qs('#mobileSearchHint')].forEach(function (el) {
+      el.textContent = text;
+      el.hidden = !text;
+    });
   }
 
   // ---------------------------------------------------------------- 列表

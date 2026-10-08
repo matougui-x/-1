@@ -667,6 +667,24 @@ body.no-tabbar .toast-wrap {
   font-weight: 600;
 }
 
+/* 搜索引导：告诉失主"这个分类只公开这一两个特征，请按它们搜"。
+   桌面端在侧栏（.side-search-hint），手机端在筛选条下面（.search-hint），
+   文案同一份，见 js/config.js 的 LF.searchHintFor。 */
+.search-hint,
+.side-search-hint {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--green-d);
+  background: var(--green-l);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  margin: 0 0 10px;
+}
+
+.side-search-hint {
+  margin: 16px 0 0;
+}
+
 /* ================================================================ 桌面端适配 */
 
 @media (min-width: 900px) {
@@ -703,6 +721,7 @@ body.no-tabbar .toast-wrap {
   .mobile-head,
   .filter-row,
   .cat-strip,
+  .search-hint,
   .searchbox-entry {
     display: none;
   }
